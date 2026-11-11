@@ -52,3 +52,12 @@ $('model').addEventListener('change', () => {
 $('effort').addEventListener('change', () => { chrome.storage.local.set({effort: $('effort').value}); msg('Сохранено.', true); });
 
 refresh();
+
+// Also makes the extension pick up an update.cmd run right away.
+chrome.runtime.sendMessage({checkUpdate: true}).then(info => {
+  if (!info || info.reloading) return;
+  const mac = navigator.platform.startsWith('Mac');
+  $('ver').innerHTML = info.updatedTo ? `<b>Обновлено до ${info.updatedTo}.</b>`
+    : info.latest ? `<b>Есть версия ${info.latest}.</b> Запустите ${mac ? 'update.command' : 'update.cmd'} в папке расширения.`
+    : 'Версия ' + info.current;
+}).catch(() => {});

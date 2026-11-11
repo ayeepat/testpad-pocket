@@ -25,7 +25,7 @@ def api(route):
     answer = json.dumps({'work': 'ИТ — методы и средства обработки информации.', 'answer': 'совокупность методов…', 'values': ['2']}, ensure_ascii=False)
     chunks = [answer[i:i + 20] for i in range(0, len(answer), 20)]
     sse = ''.join('data: ' + json.dumps({'choices': [{'delta': {'content': c}}]}) + '\n\n' for c in chunks) + 'data: [DONE]\n\n'
-    time.sleep(0.4)
+    time.sleep(1.2)
     route.fulfill(status=200, body=sse, headers={'content-type': 'text/event-stream'})
 
 def launch(p, profile):
@@ -49,6 +49,19 @@ def panel(page):
     cdp.detach()
     text = ' '.join(t for t in found if not t.lstrip().startswith(':host'))
     return text if found else None
+
+def click_in_panel(page, cls):
+    cdp = page.context.new_cdp_session(page)
+    root = cdp.send('DOM.getDocument', {'pierce': True, 'depth': -1})['root']
+    def walk(n):
+        attrs = n.get('attributes', [])
+        if 'class' in attrs and cls in attrs[attrs.index('class') + 1].split(): return n['nodeId']
+        for c in n.get('children', []) + n.get('shadowRoots', []):
+            x = walk(c)
+            if x: return x
+    q = cdp.send('DOM.getBoxModel', {'nodeId': walk(root)})['model']['border']
+    cdp.detach()
+    page.mouse.click((q[0] + q[4]) / 2, (q[1] + q[5]) / 2)
 
 def wait(cond, what, timeout=8):
     end = time.time() + timeout
@@ -77,9 +90,6 @@ with sync_playwright() as p:
     page.keyboard.press('Control+Shift+9')
     wait(lambda: page.is_checked('#t_ans_6406831'), 'correct radio checked')
     wait(lambda: 'Ответ: совокупность' in (panel(page) or ''), 'answer shown')
-    if len(sys.argv) > 1:
-        page.set_viewport_size({'width': 1000, 'height': 700}); time.sleep(0.3)
-        page.screenshot(path=sys.argv[1] + '/panel.png')
     req = requests[-1]
     assert req['auth'] == 'Bearer sk-e2e', req['auth']
     assert req['body']['model'] == 'gemini-3.8-flash' and req['body']['reasoning_effort'] == 'high'
@@ -88,6 +98,25 @@ with sync_playwright() as p:
     assert user[1]['image_url']['url'].startswith('data:image/jpeg;base64,/9j/'), 'formula attached'
     assert not page.is_checked('#ad-check') and not page.is_checked('#ad-radio')
     print('solve + fill: ok')
+
+    # Sits on top of the ad block; the eye folds the answer away and back.
+    page.set_viewport_size({'width': 1100, 'height': 760})
+    page.add_style_tag(content='.otp-ad-content{height:260px;background:#e9eef5}')
+    def inside_ad():
+        return page.evaluate("""() => { const h=[...document.documentElement.children].find(e=>e.tagName==='DIV'), a=document.querySelector('.otp-ad-content').getBoundingClientRect(), r=h.getBoundingClientRect();
+          return r.left>=a.left && r.top>=a.top-1 && r.left<a.left+20 && r.top<a.top+20; }""")
+    wait(inside_ad, 'panel placed on the ad')
+    if len(sys.argv) > 1: page.screenshot(path=sys.argv[1] + '/panel.png')
+    click_in_panel(page, 'eye')
+    wait(lambda: 'Ответ' not in (panel(page) or 'Ответ') and 'Решить' in panel(page), 'eye hides answer')
+    page.reload(); wait(lambda: panel(page) is not None, 'panel after reload')
+    page.keyboard.press('Control+Shift+9')
+    if len(sys.argv) > 1: time.sleep(0.25); page.screenshot(path=sys.argv[1] + '/progress.png', clip={'x': 0, 'y': 630, 'width': 340, 'height': 60})
+    wait(lambda: page.is_checked('#t_ans_6406831'), 'fills while folded')
+    assert 'Ответ' not in panel(page), 'eye state is remembered'
+    click_in_panel(page, 'eye')
+    wait(lambda: 'Ответ: совокупность' in (panel(page) or ''), 'eye reveals answer')
+    print('ad placement + eye: ok')
 
     page.keyboard.press('Control+Shift+8')
     wait(lambda: panel(page) is None, 'panel gone after hide')
@@ -133,6 +162,22 @@ with sync_playwright() as p:
     time.sleep(0.3); page.keyboard.press('Control+Shift+9')
     wait(lambda: 'заблокировано' in (panel(page) or '').lower(), 'locked message')
     print('restart persistence + sign-out: ok')
+
+    # Updates: the popup reports a newer GitHub version, and new files on disk make the extension reload itself.
+    # (Here the extension is loaded from the command line, which Chromium disables on reload; a "Load unpacked"
+    #  install reloads from disk. So this checks that the reload is triggered, not what happens after.)
+    ctx.route('https://raw.githubusercontent.com/**', lambda r: r.fulfill(body='{"version":"2.99.0"}', content_type='application/json'))
+    popup = ctx.new_page(); popup.goto(f'chrome-extension://{ext_id}/extension/popup.html')
+    wait(lambda: 'Есть версия 2.99.0' in popup.text_content('#ver'), 'newer version notice')
+    popup.close()
+    worker = ctx.service_workers[0]
+    manifest = json.loads((ext / 'manifest.json').read_text()); manifest['version'] = '9.9.9'
+    (ext / 'manifest.json').write_text(json.dumps(manifest))
+    with worker.expect_event('close', timeout=15000):
+        popup = ctx.new_page()
+        try: popup.goto(f'chrome-extension://{ext_id}/extension/popup.html', timeout=4000)
+        except Exception: pass
+    print('update notice + self-reload trigger: ok')
     ctx.close()
 shutil.rmtree(tmp, ignore_errors=True)
 print('E2E PASSED')

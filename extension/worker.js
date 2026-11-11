@@ -1,5 +1,6 @@
 import {API_URL, DEFAULT_MODEL, openVault, buildBody, parseReply, explainHttp, isParamError} from './lib.js';
 
+let active = 0; // solves in flight; never self-reload during one
 const OTP_URL = /^https:\/\/(?:[\w-]+\.)*onlinetestpad\.com\//i;
 
 async function apiKey() {
@@ -25,7 +26,7 @@ async function formula() {
 }
 
 /** Reads an OpenAI-style SSE stream (or a plain JSON body) and returns the message text. */
-async function readCompletion(res, onChunk) {
+async function readCompletion(res, onChunk) { // onChunk(chars so far)
   if (!/event-stream/i.test(res.headers.get('content-type') || '')) {
     const json = await res.json();
     return json.choices?.[0]?.message?.content || '';
@@ -73,7 +74,7 @@ async function solve(task, signal, progress) {
     else throw Error(explainHttp(res.status, body));
     if (!res.ok) throw Error(explainHttp(res.status, await res.text()));
   }
-  const text = await readCompletion(res, () => progress('пишет'));
+  const text = await readCompletion(res, () => n => progress('пишет', n));
   if (!text.trim()) throw Error('Модель вернула пустой ответ. Попробуйте ещё раз.');
   return parseReply(text);
 }
@@ -84,18 +85,21 @@ chrome.runtime.onConnect.addListener(port => {
   if (!sender?.tab || sender.frameId !== 0 || !OTP_URL.test(sender.url || '')) return port.disconnect();
   const abort = new AbortController();
   let open = true;
+  active++;
+  let released = false;
+  const release = () => { if (!released) { released = true; active--; } };
   const post = msg => { if (open) port.postMessage(msg); };
   // An awaited fetch is not an extension event; touching an API keeps the worker alive.
   const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
   const timeout = setTimeout(() => abort.abort(), 150000);
-  port.onDisconnect.addListener(() => { open = false; abort.abort(); clearInterval(keepAlive); clearTimeout(timeout); });
+  port.onDisconnect.addListener(() => { open = false; abort.abort(); clearInterval(keepAlive); clearTimeout(timeout); release(); });
   port.onMessage.addListener(msg => {
     if (!msg.solve) return;
-    solve(msg.solve, abort.signal, stage => post({stage}))
+    solve(msg.solve, abort.signal, (stage, chars) => post({stage, chars}))
       .then(result => post({result}))
       .catch(err => post({error: abort.signal.aborted ? 'Нет ответа за 2,5 минуты. Повторите.'
         : /failed to fetch|network/i.test(err.message) ? 'Нет связи с 302.ai. Проверьте интернет.' : err.message}))
-      .finally(() => { clearInterval(keepAlive); clearTimeout(timeout); });
+      .finally(() => { clearInterval(keepAlive); clearTimeout(timeout); release(); });
   });
 });
 
@@ -115,6 +119,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     })().then(reply);
     return true;
   }
+  if (msg.checkUpdate) { checkUpdate().then(reply); return true; }
   if (msg.lock) {
     Promise.all([chrome.storage.local.remove('apiKey'), chrome.storage.session.remove('apiKey')]).then(() => reply({ok: true}));
     return true;
@@ -124,4 +129,46 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 chrome.commands.onCommand.addListener(async (command, tab) => {
   const target = tab?.id ? tab : (await chrome.tabs.query({active: true, lastFocusedWindow: true}))[0];
   if (target?.id) chrome.tabs.sendMessage(target.id, {command}).catch(() => {});
+});
+
+/* ---------- updating in place ----------
+ * update.cmd / update.command overwrite the files in this folder. An unpacked
+ * extension serves its files straight from disk, so a changed manifest version
+ * there means new code: reload, then put the new panel into open test tabs. */
+const OTP_TABS = ['https://onlinetestpad.com/*', 'https://*.onlinetestpad.com/*'];
+const newer = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false; };
+
+async function diskVersion() {
+  try { return (await (await fetch(chrome.runtime.getURL('manifest.json'), {cache: 'no-store'})).json()).version; }
+  catch { return null; }
+}
+async function reloadIfChanged() {
+  const onDisk = await diskVersion();
+  if (onDisk && onDisk !== chrome.runtime.getManifest().version && active === 0) { chrome.runtime.reload(); return true; }
+  return false;
+}
+async function checkUpdate() {
+  const current = chrome.runtime.getManifest().version;
+  if (await reloadIfChanged()) return {reloading: true};
+  let latest = null;
+  try {
+    const res = await fetch('https://raw.githubusercontent.com/ayeepat/testpad-pocket/main/manifest.json', {cache: 'no-store', signal: AbortSignal.timeout(8000)});
+    if (res.ok) latest = (await res.json()).version;
+  } catch {}
+  const {updatedTo} = await chrome.storage.local.get('updatedTo');
+  if (updatedTo) chrome.storage.local.remove('updatedTo');
+  return {current, latest: latest && newer(latest, current) ? latest : null, updatedTo: updatedTo || null};
+}
+
+chrome.alarms.get('disk-check').then(a => { if (!a) chrome.alarms.create('disk-check', {periodInMinutes: 0.5}); });
+chrome.alarms.onAlarm.addListener(a => { if (a.name === 'disk-check') reloadIfChanged(); });
+
+chrome.runtime.onInstalled.addListener(async ({reason}) => {
+  if (reason === 'update') chrome.storage.local.set({updatedTo: chrome.runtime.getManifest().version});
+  if (reason !== 'update' && reason !== 'install') return;
+  for (const tab of await chrome.tabs.query({url: OTP_TABS})) {
+    chrome.scripting.executeScript({target: {tabId: tab.id}, files: ['extension/question.js', 'extension/panel.js']}).catch(() => {});
+  }
 });

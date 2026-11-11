@@ -1,6 +1,6 @@
 // Reads and fills one OnlineTestPad question. Site menus and ads also contain
 // inputs, so everything is scoped to .otp-item-view-question > .qcontainer.
-const otp = (() => {
+var otp = (() => { // var: re-injected after a self-update
   const visible = el => !!el?.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
   const clean = value => (value || '').replace(/\s+/g, ' ').trim();
   const TEXT_TYPES = ['text', 'textarea', 'number', 'search', 'tel', ''];
