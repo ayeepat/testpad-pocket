@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: testpad-pocket
+    runtime: node
+    plan: free
+    buildCommand: node --check server/main.mjs
+    startCommand: node server/main.mjs
+    healthCheckPath: /health
+    envVars:
+      - key: SOLVER_PASSWORD
+        sync: false
+      - key: API_302_KEY
+        sync: false
