@@ -1,26 +1,45 @@
 # TestPad Pocket
 
-A small Russian-language solver for OnlineTestPad. Load the extension on any computer and sign in to your own Render service. The 302.ai API key stays on the server.
+A tiny Russian-language solver for OnlineTestPad. It sends the current question to Gemini 3.8 Flash on 302.ai, shows a short worked solution with the answer, and fills the answer in. It never presses «Далее» or «Завершить».
 
-## First setup
+Your 302.ai key is stored in `extension/vault.json`, encrypted with your password (PBKDF2-SHA256, 600 000 rounds + AES-256-GCM). Without the password the file is useless, so the repo can stay public. No server is involved.
 
-1. [Create the free Render service](https://dashboard.render.com/blueprint/new?repo=https://github.com/ayeepat/testpad-pocket). If you already created it, open its **Environment** settings instead.
-2. Enter your 302.ai key in `API_302_KEY`. Set `SOLVER_PASSWORD` to a unique password of at least 12 characters. Save, deploy, and copy the service’s HTTPS address ending in `.onrender.com`.
-3. Download and extract this repository. In Chrome open `chrome://extensions`, or in Yandex Browser open `browser://extensions`. Enable developer mode, choose **Load unpacked**, and select the extracted folder containing `manifest.json`. Keep that folder in place.
-4. Open **TestPad Pocket** from the browser’s extensions menu. Enter the Render address and password, click **Подключить**, and allow access to your service. The address is remembered. The password expires from extension storage when the browser session ends. Repeat steps 3–4 on another computer.
+## One-time: seal your key
 
-## On a question
+On your own computer, from the repo folder (needs Node 20+):
 
-Click **Решить**. The panel shows the answer and a short worked solution. It sits above the page’s ad block when that block is on screen, or at the bottom right otherwise. On pages with several questions, focus a field in the one you want, or scroll it to the top of the viewport.
+```
+node tools/seal.mjs
+```
 
-Press **Ctrl+Shift+8** on Windows or **Control+Shift+8** on Mac (physical Control) to hide or show the entire in-page panel. Hiding discards a pending result. A value already entered in the test remains in its field. Browser shortcuts can be reassigned on an individual PC. Open the extension settings to see the actual binding, or change it in the browser’s extension shortcuts page.
+It asks for the 302.ai key and a new password (at least 12 characters), checks the key and model on 302.ai, and writes `extension/vault.json`. Commit and push that file. Run it again any time to change the key or the password.
 
-Autofill handles radio buttons, checkboxes, text and numeric fields, and single-select menus. Review the filled answer before advancing. For other controls, use the displayed solution to fill the answer manually. If a question image cannot be read, the panel reports the problem. The extension never presses Next or Finish.
+## On any computer
 
-## Request data
+1. Download this repo (Code → Download ZIP) and unzip it somewhere it can stay.
+2. Chrome: `chrome://extensions`. Yandex Browser: `browser://extensions`. Turn on developer mode, click **Load unpacked**, and pick the unzipped folder (the one with `manifest.json`).
+3. Click the TestPad Pocket icon, type the password, then click **Открыть**. That's it. You can close the window. It stays unlocked across tabs and browser restarts. To unlock only until the browser closes (on a shared PC), untick «Запомнить на этом компьютере». To remove the key from that PC, use **Дополнительно → Выйти на этом компьютере**.
 
-Clicking Solve sends the current question text, supported field descriptions, available question images, and the bundled sound formula to Gemini 3.8 Flash through 302.ai. The server requests high reasoning effort. Images are re-encoded on the device. The extension does not send the whole screen or test session tokens. Model answers can be wrong. A free service may need time to wake after inactivity.
+Tip: unpin the icon from the toolbar (puzzle-piece menu) so nothing is visible.
 
-## Verify the server
+## Hotkeys
 
-With Node 22 or later, run `node --test tests/server.test.mjs` from the repository root. The test exercises authentication and the upstream request format using a simulated provider. It does not use your API key.
+| | Windows / Linux | Mac |
+|---|---|---|
+| Solve the current question | `Ctrl+Shift+9` | `Control+Shift+9` |
+| Show / hide the panel | `Ctrl+Shift+8` | `Control+Shift+8` |
+
+Hiding removes the panel from the page completely. The answer is kept, so pressing the hotkey again brings it back. The hidden or shown state applies to every tab. Solving also works while the panel is hidden: the answer is filled in silently, and you can see the solution later. If a shortcut is taken on some PC, the page still reacts to the keys. You can also reassign them at `chrome://extensions/shortcuts`.
+
+## Panel
+
+A small «Решить» button sits just above the ad block, or at the bottom right when no ad is on screen. The answer appears in bold, with the short solution under it. Autofill handles radio buttons, checkboxes, text and number fields, and dropdowns. When a field can't be filled, the panel says so. Always check the answer before moving on, because the model can be wrong.
+
+**Дополнительно** in the popup has two settings. Thinking depth: high (the default, more accurate) or medium (faster). The model name can be changed there if 302.ai renames the model.
+
+## Tests
+
+```
+npm test               # vault crypto, prompt, reply parsing
+python3 tests/e2e.py   # real Chromium + the extension on an OnlineTestPad page; 302.ai stubbed
+```

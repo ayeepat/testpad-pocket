@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<title>TestPad Pocket</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;width:280px;padding:14px 16px 12px;background:#fbfaf7;color:#25281f;font:13px/1.45 system-ui,"Segoe UI",sans-serif}
+  h1{font:600 15px/1.2 system-ui,"Segoe UI",sans-serif;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#b9b2a3}.on .dot{background:#3e8a5e}
+  label{display:block;margin:8px 0 4px;color:#4b4f44}
+  input[type=password],input[type=text],select{font:inherit;width:100%;border:1px solid #c9c6bc;border-radius:5px;padding:6px 8px;background:#fff}
+  .row{display:flex;align-items:center;gap:6px;margin:8px 0 0;color:#4b4f44}
+  button{font:inherit;width:100%;margin-top:10px;border:0;border-radius:5px;padding:7px;background:#264e40;color:#fff;cursor:pointer}
+  button.ghost{background:none;color:#7a3b2e;border:1px solid #d9c9c3}
+  button:disabled{opacity:.6;cursor:default}
+  output{display:block;min-height:1em;margin-top:8px;color:#9b2c2c}
+  output.ok{color:#2f6b49}
+  kbd{font:11px ui-monospace,Consolas,monospace;border:1px solid #cfccc2;border-bottom-width:2px;border-radius:3px;padding:0 4px;background:#fff}
+  .keys{margin:10px 0 0;padding:8px 0 0;border-top:1px solid #e7e4dc;color:#4b4f44}
+  .keys div{display:flex;justify-content:space-between;margin:3px 0}
+  details{margin-top:10px;color:#4b4f44}summary{cursor:pointer}
+  small{color:#7a7d72}
+  [hidden]{display:none!important}
+</style>
+<h1 id="title"><span class="dot"></span><span id="state">TestPad Pocket</span></h1>
+
+<form id="unlock" hidden>
+  <label for="pass">Пароль</label>
+  <input id="pass" type="password" autocomplete="current-password" required autofocus>
+  <label class="row"><input id="remember" type="checkbox" checked> Запомнить на этом компьютере</label>
+  <button id="go">Открыть</button>
+</form>
+
+<div id="ready" hidden>
+  <small>Откройте задание OnlineTestPad. Вкладку и это окно можно закрыть.</small>
+  <div class="keys">
+    <div><span>Решить</span><span id="k-solve"></span></div>
+    <div><span>Показать / скрыть</span><span id="k-toggle"></span></div>
+  </div>
+  <details>
+    <summary>Дополнительно</summary>
+    <label for="effort">Глубина размышлений</label>
+    <select id="effort">
+      <option value="high">Высокая — точнее</option>
+      <option value="medium">Средняя — быстрее</option>
+    </select>
+    <label for="model">Модель 302.ai</label>
+    <input id="model" type="text" spellcheck="false" placeholder="gemini-3.8-flash">
+    <button id="lock" class="ghost" type="button">Выйти на этом компьютере</button>
+  </details>
+</div>
+<output id="msg" role="status"></output>
+<script type="module" src="popup.js"></script>
+</html>

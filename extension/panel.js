@@ -1,65 +1,129 @@
 (() => {
-  let hidden = sessionStorage.getItem('testpad-pocket-hidden') === '1';
-  let ticket=0, bound=null, signature='', pending=false;
-  const host=document.createElement('div');
-  const shadow=host.attachShadow({mode:'closed'});
-  shadow.innerHTML='<style>:host{all:initial;display:block;position:relative;z-index:2;height:0}section{position:absolute;bottom:3px;right:4px;font:12px/1.4 Inter,system-ui,sans-serif;color:#2f3733;text-align:left}button{display:block;margin-left:auto;border:1px solid #c3c9c5;border-radius:4px;background:#fafbf9;color:#414b44;font:11px/16px system-ui;padding:0 5px;cursor:pointer}output:not(:empty){display:block;white-space:pre-wrap;overflow:auto;max-height:32vh;width:max-content;max-width:min(360px,82vw);box-sizing:border-box;background:#fffffc;border-left:2px solid #769384;padding:5px 8px;margin:0 0 3px;box-shadow:0 1px 4px #0002}</style><section><output aria-live="polite"></output><button type="button">Решить</button></section>';
-  const button=shadow.querySelector('button'), output=shadow.querySelector('output');
-  function clear() {ticket++; pending=false; output.textContent='';button.disabled=false;button.textContent='Решить';signature='';}
+  let hidden = true;            // until storage answers, show nothing
+  let bound = null;             // question root the panel is attached to
+  let shownKey = '';            // question signature the output belongs to
+  let job = null;               // {key, root, started, stage, port}
+  const results = new Map();    // signature -> {answer, work, note, error}
+
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({mode: 'closed'});
+  shadow.innerHTML = `<style>
+:host{all:initial;display:block;position:relative;z-index:2147483000;height:0}
+section{position:absolute;bottom:3px;right:4px;font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#2b322e;text-align:left}
+button{display:block;margin-left:auto;border:1px solid #cfd4d1;border-radius:3px;background:#f7f8f7;color:#59625c;font:10px/14px system-ui,"Segoe UI",sans-serif;padding:0 4px;cursor:pointer;opacity:.75}
+button:hover{opacity:1}button:disabled{cursor:default}
+output:not(:empty){display:block;overflow:auto;max-height:34vh;width:max-content;max-width:min(380px,84vw);box-sizing:border-box;background:#fffffd;border-left:2px solid #6f8f7e;padding:4px 8px;margin:0 0 3px;box-shadow:0 1px 4px #0002}
+.a{font-weight:600;white-space:pre-wrap}.w{white-space:pre-wrap;color:#3d4640;margin-top:2px}.n{color:#8a5a12;margin-top:2px}.e{color:#9b2c2c;white-space:pre-wrap}
+</style><section><output aria-live="polite"></output><button type="button">Решить</button></section>`;
+  const button = shadow.querySelector('button'), output = shadow.querySelector('output');
+
+  function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; }
+
+  function render() {
+    output.replaceChildren();
+    const busy = job && job.key === shownKey;
+    button.disabled = !!busy;
+    if (busy) {
+      button.textContent = `${job.stage}… ${Math.round((performance.now() - job.started) / 1000)} с`;
+      return;
+    }
+    button.textContent = 'Решить';
+    const r = results.get(shownKey);
+    if (!r) return;
+    if (r.error) return output.append(line('e', r.error));
+    if (r.answer) output.append(line('a', 'Ответ: ' + r.answer));
+    if (r.work) output.append(line('w', r.work));
+    if (r.note) output.append(line('n', r.note));
+  }
+
   function place() {
-    const root=otp.current();
-    if (hidden || !root) { if (host.isConnected) host.remove(); if (bound) clear(); bound=null;return; }
-    if (bound!==root || (signature && otp.read(root).key!==signature)) clear();
-    bound=root;
-    const ad=document.querySelector('#testform .otp-ad-content,.otp-ad-content');
-    if (ad && ad.getBoundingClientRect().top>40 && ad.getBoundingClientRect().top<innerHeight) {
-      if (host.nextSibling!==ad) ad.before(host);
-      host.style.removeProperty('position');host.style.removeProperty('right');host.style.removeProperty('bottom');
+    const root = otp.current();
+    if (hidden || !root) { if (host.isConnected) host.remove(); bound = null; return; }
+    const key = otp.read(root).key;
+    if (root !== bound || key !== shownKey) { bound = root; shownKey = key; render(); }
+    const ad = document.querySelector('#testform .otp-ad-content, .otp-ad-content');
+    const top = ad?.getBoundingClientRect().top;
+    if (ad && top > 40 && top < innerHeight) {
+      if (host.nextSibling !== ad) ad.before(host);
+      for (const p of ['position', 'right', 'bottom']) host.style.removeProperty(p);
     } else {
-      if (host.parentNode!==document.documentElement) document.documentElement.append(host);
-      if(host.style.position==='fixed') return;
-      host.style.setProperty('position','fixed','important');host.style.setProperty('right','8px','important');host.style.setProperty('bottom','6px','important');
+      if (host.parentNode !== document.documentElement) document.documentElement.append(host);
+      host.style.setProperty('position', 'fixed', 'important');
+      host.style.setProperty('right', '8px', 'important');
+      host.style.setProperty('bottom', '6px', 'important');
     }
   }
-  let lastToggle=-Infinity;
-  function toggle(){
-    if(performance.now()-lastToggle<180) return;
-    lastToggle=performance.now();
-    hidden=!hidden;
-    sessionStorage.setItem('testpad-pocket-hidden',hidden?'1':'0');
-    clear();place();
+
+  function finish(key, value) {
+    results.set(key, value);
+    if (job?.key === key) { clearInterval(job.timer); job = null; }
+    render();
   }
-  chrome.runtime.onMessage.addListener(msg=>{if(msg.toggle) toggle();});
-  // Some Chromium builds deliver the key to the page instead of dispatching the command.
-  // Respect an unassigned or remapped browser shortcut.
-  let defaultBinding=false;
-  function checkBinding(){chrome.runtime.sendMessage({binding:true}).then(value=>{defaultBinding=value===true;}).catch(()=>{});}
-  checkBinding();addEventListener('focus',checkBinding);
-  addEventListener('keydown',event=>{
-    if(defaultBinding && event.isTrusted && !event.repeat && event.code==='Digit8' &&
-       event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey) {
-      event.preventDefault();toggle();
-    }
-  },true);
-  button.onclick=async e=>{
-    if (!e.isTrusted || pending || !bound) return;
-    const start=otp.read(bound), id=++ticket;
-    signature=start.key; pending=true; button.disabled=true; button.textContent='Решаю…'; output.textContent='';
-    try {
-      const images=await otp.pictures(start.visual);
-      if(id!==ticket) return;
-      const result=await chrome.runtime.sendMessage({solve:{question:start.question,fields:start.fields,images}});
-      if (id!==ticket || hidden || otp.current()!==start.root) return;
-      const fresh=otp.read(start.root);
-      if (fresh.key!==start.key) {clear();return;}
-      if (!result || result.error) throw Error(result?.error || 'Нет ответа сервера.');
-      const ok=otp.fill(fresh,result.values);
-      output.textContent=[result.work,'Ответ: '+result.answer,ok?'':'Проверьте и внесите ответ вручную.'].filter(Boolean).join('\n');
-    } catch(err) {if(id===ticket) output.textContent=err.message;}
-    finally {if(id===ticket){pending=false;button.disabled=false;button.textContent='Решить';}}
-  };
-  let scheduled=false;
-  function schedule(){if(!scheduled){scheduled=true;requestAnimationFrame(()=>{scheduled=false;place();});}}
-  new MutationObserver(schedule).observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['hidden','class','src','style']});
-  addEventListener('scroll',schedule,{passive:true});addEventListener('resize',schedule);place();
+
+  async function solve() {
+    const root = otp.current();
+    if (!root) return;
+    const snap = otp.read(root);
+    if (job) { if (job.key === snap.key) return; job.port?.disconnect(); clearInterval(job.timer); job = null; }
+    const me = job = {key: snap.key, root, started: performance.now(), stage: 'Читаю', port: null,
+      timer: setInterval(() => { if (!hidden) render(); }, 1000)};
+    results.delete(snap.key);
+    render();
+    const {images, skipped} = await otp.pictures(snap.visual);
+    if (job !== me) return;
+    let port;
+    try { port = me.port = chrome.runtime.connect({name: 'solve'}); }
+    catch { return finish(snap.key, {error: 'Расширение обновилось — обновите страницу (F5).'}); }
+    me.stage = 'Решаю'; render();
+    port.onMessage.addListener(msg => {
+      if (job !== me) return;
+      if (msg.stage) { me.stage = msg.stage === 'пишет' ? 'Пишу' : 'Решаю'; return; }
+      port.disconnect();
+      if (msg.error) return finish(snap.key, {error: msg.error});
+      const r = msg.result;
+      const notes = [];
+      const fresh = root.isConnected ? otp.read(root) : null;
+      if (fresh?.key === snap.key) {
+        const {filled, total} = otp.fill(fresh, r.values);
+        if (total && filled < total) notes.push(filled ? `Заполнено ${filled} из ${total} — остальное вручную.` : 'Внесите ответ вручную.');
+      } else notes.push('Задание сменилось — ответ не вносился.');
+      if (skipped) notes.push(`Не удалось прочитать рисунков: ${skipped}.`);
+      finish(snap.key, {answer: r.answer, work: r.work, note: notes.join(' ')});
+    });
+    port.onDisconnect.addListener(() => {
+      if (job === me) finish(snap.key, {error: 'Соединение прервано. Нажмите ещё раз.'});
+    });
+    port.postMessage({solve: {question: snap.question, fields: snap.fields, images}});
+  }
+
+  const last = {};
+  function once(name, fn) { // the browser command and the page key event can both fire
+    const now = performance.now();
+    if (now - (last[name] || -1e9) < 250) return;
+    last[name] = now; fn();
+  }
+  const toggle = () => chrome.storage.local.set({hidden: !hidden});
+
+  chrome.storage.local.get('hidden').then(s => { hidden = s.hidden === true; place(); });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.hidden) { hidden = changes.hidden.newValue === true; place(); }
+  });
+  chrome.runtime.onMessage.addListener(msg => {
+    if (msg.command === 'toggle-panel') once('toggle', toggle);
+    if (msg.command === 'solve') once('solve', solve);
+  });
+  // Fallback when the browser shortcut is taken or unassigned on this PC.
+  addEventListener('keydown', e => {
+    if (!e.isTrusted || e.repeat || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+    if (e.code === 'Digit8') { e.preventDefault(); e.stopPropagation(); once('toggle', toggle); }
+    if (e.code === 'Digit9') { e.preventDefault(); e.stopPropagation(); once('solve', solve); }
+  }, true);
+  button.addEventListener('click', e => { if (e.isTrusted) solve(); });
+
+  let scheduled = false;
+  const schedule = () => { if (!scheduled) { scheduled = true; requestAnimationFrame(() => { scheduled = false; place(); }); } };
+  new MutationObserver(records => { if (records.some(r => !host.contains(r.target) && r.target !== host)) schedule(); })
+    .observe(document.documentElement, {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class', 'src', 'style']});
+  addEventListener('scroll', schedule, {passive: true});
+  addEventListener('resize', schedule);
 })();
