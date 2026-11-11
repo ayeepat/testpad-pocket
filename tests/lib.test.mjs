@@ -28,6 +28,7 @@ test('request carries the model, effort, prompt, formula and fields', () => {
   assert.equal(body.stream, true);
   assert.match(body.messages[0].content, /по-русски/);
   assert.match(body.messages[0].content, /перепроверь/);
+  assert.match(body.messages[0].content, /только шаги/);
   const [text, formula, image] = body.messages[1].content;
   assert.match(text.text, /1\. один вариант: 1\) 10; 2\) 20\n2\. поле ввода \(подпись: Кбайт\)/);
   assert.equal(formula.image_url.url, 'data:image/jpeg;base64,AAA');

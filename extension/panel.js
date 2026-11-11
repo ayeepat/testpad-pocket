@@ -20,15 +20,18 @@ header{display:flex;align-items:center;gap:6px;padding:5px 7px 4px 9px;position:
 button{all:unset;cursor:pointer;color:#9a9a9a;font-size:10px;line-height:14px;padding:0 3px;border-radius:3px;position:relative}
 button:hover{color:#555;background:#f2f2f2}
 button.eye{display:flex;align-items:center;height:14px}
+button.go{font-size:11px;font-weight:600;padding:0 5px}
 button.eye.dot::after{content:"";position:absolute;top:-1px;right:0;width:4px;height:4px;border-radius:50%;background:#7fb08f}
 button.eye.err::after{background:#d48a8a}
-.bar{position:absolute;left:0;right:0;bottom:0;height:2px;background:transparent}
-.bar i{display:block;height:100%;width:0;background:#c9d3cc;transition:width .6s ease,opacity .4s;opacity:0}
-.bar.on i{opacity:1}
+.card{position:relative}
+.bar{display:none;height:2px;background:#e8ebe9;min-width:150px}
+.bar.on{display:block}
+.bar i{display:block;height:100%;width:0;background:#7d9486;transition:width .6s ease}
+button:disabled{cursor:default;opacity:.3;background:none!important;color:#9a9a9a!important}
 output{display:block;overflow:auto;max-height:var(--h,34vh);padding:0 10px 8px}
 output:empty,output[hidden]{display:none}
 .a{font-weight:600;white-space:pre-wrap}.w{white-space:pre-wrap;color:#444;margin-top:3px;font-size:12px}.n{color:#8a6a2a;margin-top:3px;font-size:11px}.e{color:#a33;white-space:pre-wrap;font-size:12px}
-</style><div class="card"><header><span class="lbl">Реклама</span><button class="eye" type="button" title=""></button><button class="go" type="button">Решить</button><div class="bar"><i></i></div></header><output></output></div>`;
+</style><div class="card"><header><span class="lbl">Реклама</span><button class="eye" type="button" title=""></button><button class="go" type="button">?</button></header><output></output><div class="bar"><i></i></div></div>`;
   const $ = s => shadow.querySelector(s);
   const card = $('.card'), eye = $('.eye'), go = $('.go'), bar = $('.bar'), fillBar = $('.bar i'), output = $('output');
 
@@ -38,13 +41,14 @@ output:empty,output[hidden]{display:none}
     if (!job) return 0;
     const t = (performance.now() - job.started) / 1000;
     if (job.stage === 'read') return 6;
-    if (job.stage === 'think') return 10 + 58 * (1 - Math.exp(-t / 25));
+    if (job.stage === 'think') return 12 + 60 * (1 - Math.exp(-t / 12));
     return Math.min(97, 70 + 27 * Math.min(1, job.chars / 500));
   }
 
   function render() {
     const busy = !!job && job.key === shownKey;
     bar.classList.toggle('on', busy);
+    go.disabled = busy;
     fillBar.style.width = busy ? progress().toFixed(1) + '%' : '0';
     const r = results.get(shownKey);
     eye.innerHTML = reveal ? EYE : EYE_OFF;

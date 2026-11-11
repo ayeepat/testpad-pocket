@@ -86,8 +86,8 @@ with sync_playwright() as p:
     page = ctx.new_page(); errors = []
     page.on('pageerror', lambda e: errors.append(str(e)))
     page.goto('https://onlinetestpad.com/ru/test/qa')
-    wait(lambda: panel(page) is not None and 'Решить' in panel(page), 'panel visible')
-    page.keyboard.press('Control+Shift+9')
+    wait(lambda: panel(page) is not None and '?' in panel(page) and 'Решить' not in panel(page), 'panel visible with ? button')
+    click_in_panel(page, 'go')  # the '?' button
     wait(lambda: page.is_checked('#t_ans_6406831'), 'correct radio checked')
     wait(lambda: 'Ответ: совокупность' in (panel(page) or ''), 'answer shown')
     req = requests[-1]
@@ -108,7 +108,7 @@ with sync_playwright() as p:
     wait(inside_ad, 'panel placed on the ad')
     if len(sys.argv) > 1: page.screenshot(path=sys.argv[1] + '/panel.png')
     click_in_panel(page, 'eye')
-    wait(lambda: 'Ответ' not in (panel(page) or 'Ответ') and 'Решить' in panel(page), 'eye hides answer')
+    wait(lambda: 'Ответ' not in (panel(page) or 'Ответ') and '?' in panel(page), 'eye hides answer')
     page.reload(); wait(lambda: panel(page) is not None, 'panel after reload')
     page.keyboard.press('Control+Shift+9')
     if len(sys.argv) > 1: time.sleep(0.25); page.screenshot(path=sys.argv[1] + '/progress.png', clip={'x': 0, 'y': 630, 'width': 340, 'height': 60})
