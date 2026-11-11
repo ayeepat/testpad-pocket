@@ -2,7 +2,7 @@
   let hidden = true;            // whole panel (hotkey); until storage answers, show nothing
   let reveal = true;            // eye: answer text shown or folded away
   let shownKey = '';            // question signature the output belongs to
-  let job = null;               // {key, started, stage, chars, port, timer}
+  let job = null;               // {key, port, timer}
   const results = new Map();    // signature -> {answer, work, note, error}
   const life = new AbortController();
 
@@ -21,39 +21,24 @@ button{all:unset;cursor:pointer;color:#9a9a9a;font-size:10px;line-height:14px;pa
 button:hover{color:#555;background:#f2f2f2}
 button.eye{display:flex;align-items:center;height:14px}
 button.go{font-size:11px;font-weight:600;padding:0 5px}
-button.eye.dot::after{content:"";position:absolute;top:-1px;right:0;width:4px;height:4px;border-radius:50%;background:#7fb08f}
-button.eye.err::after{background:#d48a8a}
-.card{position:relative}
-.bar{display:none;height:2px;background:#e8ebe9;min-width:150px}
-.bar.on{display:block}
-.bar i{display:block;height:100%;width:0;background:#7d9486;transition:width .6s ease}
 button:disabled{cursor:default;opacity:.3;background:none!important;color:#9a9a9a!important}
+button.eye.dot::after{content:"";position:absolute;top:-1px;right:0;width:4px;height:4px;border-radius:50%;background:#5fae7a}
+button.eye.err::after{background:#d07a7a}
 output{display:block;overflow:auto;max-height:var(--h,34vh);padding:0 10px 8px}
 output:empty,output[hidden]{display:none}
 .a{font-weight:600;white-space:pre-wrap}.w{white-space:pre-wrap;color:#444;margin-top:3px;font-size:12px}.n{color:#8a6a2a;margin-top:3px;font-size:11px}.e{color:#a33;white-space:pre-wrap;font-size:12px}
-</style><div class="card"><header><span class="lbl">Реклама</span><button class="eye" type="button" title=""></button><button class="go" type="button">?</button></header><output></output><div class="bar"><i></i></div></div>`;
+</style><div class="card"><header><span class="lbl">Реклама</span><button class="eye" type="button" title=""></button><button class="go" type="button">?</button></header><output></output></div>`;
   const $ = s => shadow.querySelector(s);
-  const card = $('.card'), eye = $('.eye'), go = $('.go'), bar = $('.bar'), fillBar = $('.bar i'), output = $('output');
+  const card = $('.card'), eye = $('.eye'), go = $('.go'), output = $('output');
 
   function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; }
 
-  function progress() {
-    if (!job) return 0;
-    const t = (performance.now() - job.started) / 1000;
-    if (job.stage === 'read') return 6;
-    if (job.stage === 'think') return 12 + 60 * (1 - Math.exp(-t / 12));
-    return Math.min(97, 70 + 27 * Math.min(1, job.chars / 500));
-  }
-
   function render() {
-    const busy = !!job && job.key === shownKey;
-    bar.classList.toggle('on', busy);
-    go.disabled = busy;
-    fillBar.style.width = busy ? progress().toFixed(1) + '%' : '0';
+    go.disabled = !!job && job.key === shownKey;   // "?" fades and can't be pressed while sent
     const r = results.get(shownKey);
     eye.innerHTML = reveal ? EYE : EYE_OFF;
-    eye.classList.toggle('dot', !!r && !reveal);
-    eye.classList.toggle('err', !!r?.error && !reveal);
+    eye.classList.toggle('dot', !!r);                // green = answer ready, red = error
+    eye.classList.toggle('err', !!r?.error);
     output.hidden = !reveal;
     output.replaceChildren();
     if (!r || !reveal) return;
@@ -77,8 +62,11 @@ output:empty,output[hidden]{display:none}
     if (!chrome.runtime?.id) return teardown();
     const root = otp.current();
     if (hidden || !root) { if (host.isConnected) host.remove(); return; }
-    const key = otp.read(root).key;
-    if (key !== shownKey) { shownKey = key; render(); }
+    if (root !== lastRoot || dirty) {
+      lastRoot = root; dirty = false;
+      const key = otp.read(root).key;
+      if (key !== shownKey) { shownKey = key; render(); }
+    }
     if (!host.isConnected) document.documentElement.append(host);
     const r = adRect(), s = host.style;
     if (r) { // sit on top of the ad, top-left corner
@@ -98,7 +86,7 @@ output:empty,output[hidden]{display:none}
 
   function finish(key, value) {
     results.set(key, value);
-    if (job?.key === key) { clearInterval(job.timer); job = null; }
+    if (job?.key === key) { clearTimeout(job.timer); job = null; }
     render();
   }
 
@@ -106,9 +94,9 @@ output:empty,output[hidden]{display:none}
     const root = otp.current();
     if (!root) return;
     const snap = otp.read(root);
-    if (job) { if (job.key === snap.key) return; job.port?.disconnect(); clearInterval(job.timer); job = null; }
-    const me = job = {key: snap.key, started: performance.now(), stage: 'read', chars: 0, port: null,
-      timer: setInterval(() => { if (!hidden) render(); }, 700)};
+    if (job) { if (job.key === snap.key) return; job.port?.disconnect(); clearTimeout(job.timer); job = null; }
+    const me = job = {key: snap.key, port: null,
+      timer: setTimeout(() => { if (job === me) { me.port?.disconnect(); finish(snap.key, {error: 'Нет ответа. Нажмите ? ещё раз.'}); } }, 100000)};
     results.delete(snap.key);
     render();
     const {images, skipped} = await otp.pictures(snap.visual);
@@ -116,10 +104,9 @@ output:empty,output[hidden]{display:none}
     let port;
     try { port = me.port = chrome.runtime.connect({name: 'solve'}); }
     catch { return finish(snap.key, {error: 'Расширение обновилось — обновите страницу (F5).'}); }
-    me.stage = 'think'; render();
     port.onMessage.addListener(msg => {
       if (job !== me) return;
-      if (msg.stage) { if (msg.stage === 'пишет') { me.stage = 'write'; me.chars = msg.chars || 0; } return; }
+      if (msg.stage) return;
       port.disconnect();
       if (msg.error) return finish(snap.key, {error: msg.error});
       const r = msg.result;
@@ -170,7 +157,17 @@ output:empty,output[hidden]{display:none}
 
   let scheduled = false;
   const schedule = () => { if (!scheduled) { scheduled = true; requestAnimationFrame(() => { scheduled = false; place(); }); } };
-  const observer = new MutationObserver(records => { if (records.some(r => r.target !== host)) schedule(); });
+  let lastRoot = null, dirty = true;
+  const observer = new MutationObserver(records => {
+    let relevant = false;
+    for (const r of records) {
+      if (r.target === host) continue;
+      relevant = true;
+      const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
+      if (el?.closest('.otp-item-view-question')) dirty = true;   // ads changing don't count
+    }
+    if (relevant) schedule();
+  });
   observer.observe(document.documentElement, {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class', 'src', 'style']});
   addEventListener('scroll', schedule, {passive: true, capture: true, signal: life.signal});
   addEventListener('resize', schedule, {signal: life.signal});
@@ -179,7 +176,7 @@ output:empty,output[hidden]{display:none}
   // After the extension updates itself, this copy loses its connection; the new copy takes over.
   function teardown() {
     life.abort(); observer.disconnect(); clearInterval(watchdog);
-    if (job) clearInterval(job.timer);
+    if (job) clearTimeout(job.timer);
     host.remove();
   }
 })();

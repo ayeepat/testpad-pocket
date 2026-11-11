@@ -111,7 +111,6 @@ with sync_playwright() as p:
     wait(lambda: 'Ответ' not in (panel(page) or 'Ответ') and '?' in panel(page), 'eye hides answer')
     page.reload(); wait(lambda: panel(page) is not None, 'panel after reload')
     page.keyboard.press('Control+Shift+9')
-    if len(sys.argv) > 1: time.sleep(0.25); page.screenshot(path=sys.argv[1] + '/progress.png', clip={'x': 0, 'y': 630, 'width': 340, 'height': 60})
     wait(lambda: page.is_checked('#t_ans_6406831'), 'fills while folded')
     assert 'Ответ' not in panel(page), 'eye state is remembered'
     click_in_panel(page, 'eye')
@@ -132,6 +131,15 @@ with sync_playwright() as p:
     page.keyboard.press('Control+Shift+8')
     wait(lambda: 'Ответ: совокупность' in (panel(page) or ''), 'result survives hide/show')
     print('hide/show + stealth solve: ok')
+
+    # A picture that never loads must not freeze the solve (it used to wait forever).
+    ctx.route('https://onlinetestpad.com/never.png', lambda r: None)  # never answered
+    page.evaluate("""document.querySelector('.qtext').insertAdjacentHTML('beforeend', '<img src="https://onlinetestpad.com/never.png" width="200" height="100" style="display:block">')""")
+    page.evaluate("document.querySelector('#t_ans_6406831').checked = false")
+    t0 = time.time(); page.keyboard.press('Control+Shift+9')
+    wait(lambda: page.is_checked('#t_ans_6406831'), 'solves despite a stuck picture', timeout=12)
+    wait(lambda: 'рисунков: 1' in (panel(page) or ''), 'reports the unreadable picture')
+    print(f'stuck picture: ok ({time.time() - t0:.1f}s)')
 
     mode['v'] = 'param'
     page.evaluate("document.querySelector('.qtext').textContent = 'Второй вопрос'")

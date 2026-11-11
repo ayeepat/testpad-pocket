@@ -84,8 +84,10 @@ var otp = (() => { // var: re-injected after a self-update
   /** Returns {images, skipped}. Unreadable pictures are skipped, not fatal. */
   async function pictures(elements) {
     const images = []; let skipped = 0;
+    // A picture that never loads (lazy, broken) must not hold the solve hostage.
+    const timeout = ms => new Promise((_, reject) => setTimeout(() => reject(Error('timeout')), ms));
     for (const el of elements.slice(0, 10)) {
-      try { const url = await rasterize(el); if (url) images.push(url); else skipped++; }
+      try { const url = await Promise.race([rasterize(el), timeout(4000)]); if (url) images.push(url); else skipped++; }
       catch { skipped++; }
     }
     return {images, skipped: skipped + Math.max(0, elements.length - 10)};

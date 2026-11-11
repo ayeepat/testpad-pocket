@@ -1,7 +1,7 @@
 """Places the panel on a page laid out like real OnlineTestPad (side ad columns, top banners,
 ad row under the question) at laptop, 1080p and 1440p sizes. Checks that the card sits on an ad
 and never covers the question or the Далее/Завершить buttons, and saves screenshots
-(including one mid-solve, showing the progress bar).   python3 tests/layout.py [shots-dir]"""
+(including one mid-solve, with the faded «?»).   python3 tests/layout.py [shots-dir]"""
 import json, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -70,7 +70,10 @@ with sync_playwright() as p:
         visible_ads = page.evaluate("""[...document.querySelectorAll('.otp-ad-content,.adleft,.adright')].filter(e=>{const r=e.getBoundingClientRect();return r.width&&r.bottom>0&&r.top<innerHeight}).map(e=>e.className)""")
         print(f'{name}: card={[round(x) for x in card]} on-ad-row={on_ad} covers-question={overlap(card, q)} covers-buttons={overlap(card, btns)} ads-on-screen={visible_ads}')
         assert not overlap(card, q) and not overlap(card, btns), name
-        if shots: page.screenshot(path=str(shots / f'{name}.png'))
+        if shots:
+            page.screenshot(path=str(shots / f'{name}.png'))
+            c = page.evaluate(CARD)
+            page.screenshot(path=str(shots / f'{name}-done-zoom.png'), clip={'x': c[0] - 10, 'y': c[1] - 10, 'width': 420, 'height': 90}, scale='device')
         page.close()
     ctx.close()
 shutil.rmtree(tmp, ignore_errors=True)
