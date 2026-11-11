@@ -1,4 +1,4 @@
-chrome.action.onClicked.addListener(()=>chrome.tabs.create({url:chrome.runtime.getURL('settings.html')}));
+chrome.action.onClicked.addListener(()=>chrome.tabs.create({url:new URL('settings.html', self.location.href).href}));
 chrome.commands.onCommand.addListener(async (command, tab)=>{
   if (command !== 'toggle-panel') return;
   const target = tab || (await chrome.tabs.query({active:true,lastFocusedWindow:true}))[0];

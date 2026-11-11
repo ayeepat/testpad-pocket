@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TestPad Pocket",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Краткое решение текущей задачи OnlineTestPad.",
   "permissions": [
     "storage"

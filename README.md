@@ -6,7 +6,7 @@ A small Russian-language solver for OnlineTestPad. Load the extension on any com
 
 1. [Create the free Render service](https://dashboard.render.com/blueprint/new?repo=https://github.com/ayeepat/testpad-pocket). If you already created it, open its **Environment** settings instead.
 2. Enter your 302.ai key in `API_302_KEY`. Set `SOLVER_PASSWORD` to a unique password of at least 12 characters. Save, deploy, and copy the service’s HTTPS address ending in `.onrender.com`.
-3. Download and extract this repository. In Chrome open `chrome://extensions`, or in Yandex Browser open `browser://extensions`. Enable developer mode, choose **Load unpacked**, and select the **extension** folder containing `manifest.json`. Keep that folder in place.
+3. Download and extract this repository. In Chrome open `chrome://extensions`, or in Yandex Browser open `browser://extensions`. Enable developer mode, choose **Load unpacked**, and select the extracted folder containing `manifest.json`. Keep that folder in place.
 4. Open **TestPad Pocket** from the browser’s extensions menu. Enter the Render address and password, click **Подключить**, and allow access to your service. The address is remembered. The password expires from extension storage when the browser session ends. Repeat steps 3–4 on another computer.
 
 ## On a question
