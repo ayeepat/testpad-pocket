@@ -63,6 +63,33 @@ def click_in_panel(page, cls):
     cdp.detach()
     page.mouse.click((q[0] + q[4]) / 2, (q[1] + q[5]) / 2)
 
+def node(page, cls):
+    """(class attribute, border box) of the closed-shadow element with this class."""
+    cdp = page.context.new_cdp_session(page)
+    root = cdp.send('DOM.getDocument', {'pierce': True, 'depth': -1})['root']
+    def walk(n):
+        attrs = n.get('attributes', [])
+        if 'class' in attrs and cls in attrs[attrs.index('class') + 1].split(): return n
+        for c in n.get('children', []) + n.get('shadowRoots', []):
+            x = walk(c)
+            if x: return x
+    n = walk(root)
+    box = cdp.send('DOM.getBoxModel', {'nodeId': n['nodeId']})['model']['border']
+    cdp.detach()
+    return n['attributes'][n['attributes'].index('class') + 1], [round(v) for v in box]
+
+def done(page):
+    try: return 'dot' in node(page, 'eye')[0]
+    except Exception: return False
+
+def open_answer(page):
+    """Answers arrive folded with a dot on the eye; one click opens them. Returns the panel text."""
+    wait(lambda: done(page), 'dot on the eye')
+    assert 'Ответ' not in panel(page), 'answer must not pop open by itself'
+    click_in_panel(page, 'eye')
+    time.sleep(0.15)
+    return panel(page)
+
 def wait(cond, what, timeout=8):
     end = time.time() + timeout
     while time.time() < end:
@@ -89,7 +116,7 @@ with sync_playwright() as p:
     wait(lambda: panel(page) is not None and '?' in panel(page) and 'Решить' not in panel(page), 'panel visible with ? button')
     click_in_panel(page, 'go')  # the '?' button
     wait(lambda: page.is_checked('#t_ans_6406831'), 'correct radio checked')
-    wait(lambda: 'Ответ: совокупность' in (panel(page) or ''), 'answer shown')
+    assert 'Ответ: совокупность' in open_answer(page), 'answer shown after clicking the eye'
     req = requests[-1]
     assert req['auth'] == 'Bearer sk-e2e', req['auth']
     assert req['body']['model'] == 'gemini-3.8-flash' and req['body']['reasoning_effort'] == 'high'
@@ -106,16 +133,22 @@ with sync_playwright() as p:
         return page.evaluate("""() => { const h=[...document.documentElement.children].find(e=>e.tagName==='DIV'), a=document.querySelector('.otp-ad-content').getBoundingClientRect(), r=h.getBoundingClientRect();
           return r.left>=a.left && r.top>=a.top-1 && r.left<a.left+20 && r.top<a.top+20; }""")
     wait(inside_ad, 'panel placed on the ad')
-    if len(sys.argv) > 1: page.screenshot(path=sys.argv[1] + '/panel.png')
     click_in_panel(page, 'eye')
-    wait(lambda: 'Ответ' not in (panel(page) or 'Ответ') and '?' in panel(page), 'eye hides answer')
+    wait(lambda: 'Ответ' not in (panel(page) or 'Ответ') and '?' in panel(page), 'eye folds the answer')
     page.reload(); wait(lambda: panel(page) is not None, 'panel after reload')
+    page.add_style_tag(content='.otp-ad-content{height:260px;background:#e9eef5}')
+    wait(inside_ad, 'panel placed on the ad after reload')
     page.keyboard.press('Control+Shift+9')
     wait(lambda: page.is_checked('#t_ans_6406831'), 'fills while folded')
-    assert 'Ответ' not in panel(page), 'eye state is remembered'
-    click_in_panel(page, 'eye')
-    wait(lambda: 'Ответ: совокупность' in (panel(page) or ''), 'eye reveals answer')
-    print('ad placement + eye: ok')
+    wait(lambda: done(page), 'green dot')
+    if len(sys.argv) > 1: page.screenshot(path=sys.argv[1] + '/folded.png')
+    eye_before, go_before = node(page, 'eye')[1], node(page, 'go')[1]
+    assert 'Ответ: совокупность' in open_answer(page)
+    if len(sys.argv) > 1: page.screenshot(path=sys.argv[1] + '/open.png')
+    assert node(page, 'eye')[1] == eye_before and node(page, 'go')[1] == go_before, 'eye and ? must not move when the answer opens'
+    click_in_panel(page, 'eye'); time.sleep(0.15)
+    assert node(page, 'eye')[1] == eye_before, 'nor when it folds'
+    print('ad placement + eye (folded by default, buttons stay put): ok')
 
     page.keyboard.press('Control+Shift+8')
     wait(lambda: panel(page) is None, 'panel gone after hide')
@@ -129,7 +162,8 @@ with sync_playwright() as p:
     wait(lambda: page.is_checked('#t_ans_6406831'), 'hidden solve fills')
     assert len(requests) == n + 1 and panel(page) is None
     page.keyboard.press('Control+Shift+8')
-    wait(lambda: 'Ответ: совокупность' in (panel(page) or ''), 'result survives hide/show')
+    wait(lambda: panel(page) is not None, 'shown again')
+    assert 'Ответ: совокупность' in open_answer(page), 'result survives hide/show'
     print('hide/show + stealth solve: ok')
 
     # A picture that never loads must not freeze the solve (it used to wait forever).
@@ -138,19 +172,20 @@ with sync_playwright() as p:
     page.evaluate("document.querySelector('#t_ans_6406831').checked = false")
     t0 = time.time(); page.keyboard.press('Control+Shift+9')
     wait(lambda: page.is_checked('#t_ans_6406831'), 'solves despite a stuck picture', timeout=12)
-    wait(lambda: 'рисунков: 1' in (panel(page) or ''), 'reports the unreadable picture')
+    assert 'рисунков: 1' in open_answer(page), 'reports the unreadable picture'
     print(f'stuck picture: ok ({time.time() - t0:.1f}s)')
 
     mode['v'] = 'param'
     page.evaluate("document.querySelector('.qtext').textContent = 'Второй вопрос'")
     wait(lambda: 'Ответ' not in (panel(page) or 'x'), 'panel clears for a new question')
     page.keyboard.press('Control+Shift+9')
-    wait(lambda: 'Ответ: совокупность' in (panel(page) or ''), 'param-error retry')
+    assert 'Ответ: совокупность' in open_answer(page), 'param-error retry'
     assert 'reasoning_effort' not in requests[-1]['body'] and 'reasoning_effort' in requests[-2]['body']
     mode['v'] = 'unauthorized'
     page.evaluate("document.querySelector('.qtext').textContent = 'Третий вопрос'")
     time.sleep(0.3); page.keyboard.press('Control+Shift+9')
-    wait(lambda: 'Ключ 302.ai не принят' in (panel(page) or ''), 'auth error shown')
+    wait(lambda: 'err' in node(page, 'eye')[0], 'red dot on error')
+    assert 'Ключ 302.ai не принят' in open_answer(page), 'auth error shown'
     print('errors: ok')
     assert not errors, errors
     ctx.close()
@@ -168,7 +203,7 @@ with sync_playwright() as p:
     wait(lambda: popup.is_visible('#unlock'), 'locked again')
     page.evaluate("document.querySelector('.qtext').textContent = 'После выхода'")
     time.sleep(0.3); page.keyboard.press('Control+Shift+9')
-    wait(lambda: 'заблокировано' in (panel(page) or '').lower(), 'locked message')
+    assert 'заблокировано' in open_answer(page).lower(), 'locked message'
     print('restart persistence + sign-out: ok')
 
     # Updates: the popup reports a newer GitHub version, and new files on disk make the extension reload itself.

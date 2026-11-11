@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TestPad Pocket",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "Краткое решение текущей задачи OnlineTestPad.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "alarms", "scripting"],
