@@ -1,7 +1,35 @@
 // Shared by the extension's service worker and tools/seal.mjs (Node 20+).
 // Only Web Crypto and plain JS here, so both runtimes load the same file.
 
-export const API_URL = 'https://api.302.ai/v1/chat/completions';
+// Same 302.ai account and key on both. The .cn mirror sits on Alibaba Cloud; in Russia
+// the main host (Microsoft Azure) is often throttled by ISPs: big requests freeze or reset.
+export const API_HOSTS = ['https://api.302ai.cn', 'https://api.302.ai'];
+export const CHAT_PATH = '/v1/chat/completions';
+
+// Russian ISPs let small requests to throttled clouds through and freeze bigger ones (~16 KB),
+// so a plain ping would pick exactly the wrong host. A host passes only if it moves a 24 KB page
+// down and a ~96 KB body (like a real request with pictures) up. No key is sent: nothing is billed.
+const PROBE_BODY = 'x'.repeat(96 * 1024);
+export async function probeHost(host, signal) {
+  const t0 = performance.now();
+  const opts = {signal, cache: 'no-store', credentials: 'omit'};
+  const [page, reply] = await Promise.all([
+    fetch(host + '/', opts).then(r => r.text()),
+    fetch(host + CHAT_PATH, {...opts, method: 'POST', headers: {'Content-Type': 'application/json'}, body: PROBE_BODY}).then(r => r.text()),
+  ]);
+  if (page.length < 16000) throw Error('short page');
+  if (!/api ?key/i.test(reply)) throw Error('not the 302.ai gateway'); // e.g. a Wi-Fi login page
+  return Math.round(performance.now() - t0);
+}
+
+/** First host to pass the probe, as {host, ms}; null if none passes within the timeout. */
+export async function fastestHost(hosts = API_HOSTS, timeoutMs = 12000) {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), timeoutMs);
+  try { return await Promise.any(hosts.map(host => probeHost(host, stop.signal).then(ms => ({host, ms})))); }
+  catch { return null; }
+  finally { clearTimeout(timer); stop.abort(); }
+}
 export const DEFAULT_MODEL = 'gemini-3.8-flash';
 export const ITERATIONS = 600000;
 

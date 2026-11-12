@@ -20,6 +20,7 @@
   .keys div{display:flex;justify-content:space-between;margin:3px 0}
   details{margin-top:10px;color:#4b4f44}summary{cursor:pointer}
   small{color:#7a7d72}
+  #route-row{justify-content:space-between;font-size:12px}#route-row a{color:#264e40}
   #ver{display:block;margin-top:6px}#ver b{color:#264e40;font-weight:600}
   [hidden]{display:none!important}
 </style>
@@ -47,6 +48,7 @@
     </select>
     <label for="model">Модель 302.ai</label>
     <input id="model" type="text" spellcheck="false" placeholder="gemini-3.8-flash">
+    <div class="row" id="route-row"><span>Сервер: <span id="route">…</span></span><a href="#" id="reroute">проверить</a></div>
     <button id="lock" class="ghost" type="button">Выйти на этом компьютере</button>
   </details>
 </div>

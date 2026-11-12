@@ -13,12 +13,26 @@ subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--no-check', '--out', str
                env={'PATH': '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', 'API_302_KEY': 'sk-e2e', 'VAULT_PASSWORD': PASSWORD},
                check=True, capture_output=True)
 html = (ROOT / 'tests/fixtures/onlinetestpad.html').read_text()
-requests, mode = [], {'v': 'ok'}
+requests, mode = [], {'v': 'ok', 'api.302ai.cn': 'ok', 'api.302.ai': 'ok'}
+GATEWAY_401 = '{"error":{"err_code":-10001,"message":"Missing 302 Apikey"}}'
+LANDING = '<html>' + 'x' * 24000 + '</html>'
 
 def api(route):
-    body = json.loads(route.request.post_data)
-    requests.append({'auth': route.request.headers.get('authorization'), 'body': body})
-    if mode['v'] == 'unauthorized':
+    """Both 302.ai hosts. Per host: ok | down (connection reset) | throttled (hangs, like a Russian ISP
+    freezing a big transfer) | nokey (the host doesn't know the key)."""
+    req = route.request
+    host = req.url.split('/')[2]
+    state = mode[host]
+    if state == 'throttled': return  # never answered
+    if state == 'down': return route.abort('connectionreset')
+    auth = req.headers.get('authorization')
+    if not auth:  # the route probe: landing page down, junk body up, no key sent
+        if req.method == 'GET': return route.fulfill(body=LANDING, content_type='text/html')
+        assert len(req.post_data_buffer) > 90000, 'probe uploads a real-sized body'
+        return route.fulfill(status=401, body=GATEWAY_401, content_type='application/json')
+    body = json.loads(req.post_data)
+    requests.append({'auth': auth, 'body': body, 'host': host})
+    if mode['v'] == 'unauthorized' or state == 'nokey':
         return route.fulfill(status=401, body='{"error":{"message":"invalid key"}}', content_type='application/json')
     if mode['v'] == 'param' and 'reasoning_effort' in body:
         return route.fulfill(status=400, body='{"error":{"err_code":-10003,"message":"Parameter error"}}', content_type='application/json')
@@ -33,6 +47,7 @@ def launch(p, profile):
         args=[f'--disable-extensions-except={ext}', f'--load-extension={ext}'])
     ctx.route('https://onlinetestpad.com/**', lambda r: r.fulfill(body=html, content_type='text/html; charset=utf-8'))
     ctx.route('https://api.302.ai/**', api)
+    ctx.route('https://api.302ai.cn/**', api)
     worker = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event('serviceworker')
     return ctx, worker.url.split('/')[2]
 
@@ -187,6 +202,57 @@ with sync_playwright() as p:
     wait(lambda: 'err' in node(page, 'eye')[0], 'red dot on error')
     assert 'Ключ 302.ai не принят' in open_answer(page), 'auth error shown'
     print('errors: ok')
+
+    # Picking the 302.ai address. sw() is the extension's service worker.
+    sw = lambda: ctx.service_workers[-1]
+    def set_route(host): sw().evaluate(f"chrome.storage.session.set({{route: {{host: {json.dumps(host)}, ms: 1, at: Date.now()}}}})")
+    def clear_route(): sw().evaluate("chrome.storage.session.remove('route')")
+    def stored_route(): return sw().evaluate("chrome.storage.session.get('route').then(r => r.route?.host ?? null)")
+    qn = [0]
+    def solve_new(expect='Ответ: совокупность'):
+        qn[0] += 1; n = len(requests)
+        page.evaluate(f"document.querySelector('.qtext').textContent = 'Маршрут {qn[0]}'")
+        wait(lambda: 'Ответ' not in (panel(page) or 'x') and 'err' not in node(page, 'eye')[0], 'panel clears')
+        page.keyboard.press('Control+Shift+9')
+        wait(lambda: 'dot' in node(page, 'eye')[0], 'solve finished', timeout=20)
+        assert expect in open_answer(page), (expect, panel(page))
+        return [r['host'] for r in requests[n:]]
+    def both(cn, main): mode['api.302ai.cn'], mode['api.302.ai'] = cn, main
+    mode['v'] = 'ok'
+
+    # Russia without VPN: api.302.ai freezes big transfers -> the probe picks the mirror, nothing waits on Azure.
+    both('ok', 'throttled'); clear_route()
+    t0 = time.time()
+    assert solve_new() == ['api.302ai.cn'], requests[-3:]
+    assert time.time() - t0 < 8, f'took {time.time() - t0:.1f}s'
+    assert stored_route() == 'https://api.302ai.cn'
+    # On VPN with the mirror unreachable -> the probe picks api.302.ai, no request wasted on the mirror.
+    both('down', 'ok'); clear_route()
+    assert solve_new() == ['api.302.ai']
+    assert stored_route() == 'https://api.302.ai'
+    # Stale choice: the remembered host now resets -> same solve falls back, and the choice is updated.
+    both('down', 'ok'); set_route('https://api.302ai.cn')
+    assert solve_new() == ['api.302.ai']
+    assert stored_route() == 'https://api.302.ai'
+    # The mirror doesn't know the key -> api.302.ai answers, and is used first from then on.
+    both('nokey', 'ok'); set_route('https://api.302ai.cn')
+    assert solve_new() == ['api.302ai.cn', 'api.302.ai']
+    assert stored_route() == 'https://api.302.ai'
+    assert solve_new() == ['api.302.ai']
+    # Nothing reachable -> a clear error, and nothing cached.
+    both('down', 'down'); clear_route()
+    solve_new(expect='Нет связи с 302.ai (оба адреса)')
+    assert stored_route() is None
+    # Popup shows the chosen server; "проверить" re-probes.
+    both('ok', 'throttled'); clear_route()
+    pop = ctx.new_page(); pop.goto(f'chrome-extension://{ext_id}/extension/popup.html')
+    wait(lambda: 'api.302ai.cn' in pop.text_content('#route'), 'popup shows the mirror', timeout=15)
+    both('down', 'ok'); pop.click('summary'); pop.click('#reroute')
+    wait(lambda: pop.text_content('#route').startswith('api.302.ai'), 'popup re-probes', timeout=15)
+    print('popup server line:', pop.text_content('#route'))
+    pop.close()
+    both('ok', 'ok')
+    print('host routing: ok')
     assert not errors, errors
     ctx.close()
 

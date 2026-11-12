@@ -2,6 +2,14 @@
 
 A tiny Russian-language solver for OnlineTestPad. It sends the current question to Gemini 3.8 Flash on 302.ai, shows a short worked solution with the answer, and fills the answer in. It never presses «Далее» or «Завершить».
 
+302.ai has two addresses with the same key: `api.302.ai` (Microsoft Azure) and the mirror `api.302ai.cn` (Alibaba Cloud). In Russia, ISPs let small requests to `api.302.ai` through but freeze bigger ones, so a plain ping can't tell which works. When a test page opens, the extension sends each address a free, keyless probe that moves a 24 KB page down and a 96 KB body up, then uses the first one to finish. The choice lasts 10 minutes. A failed or stalled solve forgets it, and a key the mirror doesn't accept moves the solve to the other address. The popup shows the current server under **Дополнительно**, with a link to check again.
+
+To see from a given computer which address works and whether the key is accepted on each (nothing is billed):
+
+```
+node tools/check.mjs
+```
+
 Your 302.ai key is stored in `extension/vault.json`, encrypted with your password (PBKDF2-SHA256, 600 000 rounds + AES-256-GCM). Without the password the file is useless, so the repo can stay public. No server is involved.
 
 ## One-time: seal your key

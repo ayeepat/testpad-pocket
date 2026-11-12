@@ -144,6 +144,7 @@ output:empty,output[hidden]{display:none}
   };
 
   chrome.storage.local.get('hidden').then(s => { hidden = s.hidden === true; render(); place(); });
+  chrome.runtime.sendMessage({warm: true}).catch(() => {}); // pick the 302.ai address before the first "?"
   chrome.storage.onChanged.addListener(onStorage);
   chrome.runtime.onMessage.addListener(onCommand);
   // Fallback when the browser shortcut is taken or unassigned on this PC.

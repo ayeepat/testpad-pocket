@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {sealVault, openVault, parseReply, buildBody, describeTask, explainHttp, isParamError, DEFAULT_MODEL} from '../extension/lib.js';
+import http from 'node:http';
+import {sealVault, openVault, parseReply, buildBody, describeTask, explainHttp, isParamError, DEFAULT_MODEL, probeHost, fastestHost} from '../extension/lib.js';
 
 test('vault round-trips and rejects a wrong password', async () => {
   const vault = await sealVault('  sk-test-123  ', 'correct horse battery');
@@ -43,4 +44,37 @@ test('302.ai errors become readable', () => {
   assert.match(explainHttp(400, '{"error":{"message":"model gemini-x does not exist"}}'), /Модель/);
   assert.ok(isParamError(400, '{"error":{"err_code":-10003,"message":"Parameter error"}}'));
   assert.ok(!isParamError(500, 'Parameter error'));
+});
+
+// The route probe against real local servers that behave like the cases we see in Russia.
+
+function server(kind) {
+  const s = http.createServer((req, res) => {
+    let got = 0;
+    req.on('data', c => { got += c.length; });
+    req.on('end', () => {
+      if (kind === 'freeze') return; // a throttled cloud: the connection just stops
+      if (kind === 'reset') return req.socket.destroy();
+      if (kind === 'portal') return res.end('<html>Войдите в Wi-Fi</html>'.padEnd(20000));
+      if (req.method === 'GET') return res.end('<html>' + 'x'.repeat(24000));
+      if (got < 90000) { res.statusCode = 400; return res.end('small body'); }
+      res.statusCode = 401; res.end('{"error":{"message":"Missing 302 Apikey"}}');
+    });
+  });
+  return new Promise(ok => s.listen(0, '127.0.0.1', () => ok({url: `http://127.0.0.1:${s.address().port}`, close: () => s.closeAllConnections() || s.close()})));
+}
+
+test('probe passes only a host that moves real-sized data both ways', async () => {
+  const [good, freeze, reset, portal] = await Promise.all(['good', 'freeze', 'reset', 'portal'].map(server));
+  try {
+    assert.ok(await probeHost(good.url, AbortSignal.timeout(3000)) >= 0);
+    await assert.rejects(probeHost(freeze.url, AbortSignal.timeout(500)));
+    await assert.rejects(probeHost(reset.url, AbortSignal.timeout(3000)));
+    await assert.rejects(probeHost(portal.url, AbortSignal.timeout(3000)), /gateway|short/);
+    // The working host wins even when listed after a frozen one; nothing passes -> null, within the timeout.
+    assert.equal((await fastestHost([freeze.url, reset.url, good.url], 3000)).host, good.url);
+    const t0 = Date.now();
+    assert.equal(await fastestHost([freeze.url, portal.url], 600), null);
+    assert.ok(Date.now() - t0 < 1500, 'gives up at the timeout');
+  } finally { [good, freeze, reset, portal].forEach(s => s.close()); }
 });

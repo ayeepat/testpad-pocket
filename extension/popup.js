@@ -51,7 +51,16 @@ $('model').addEventListener('change', () => {
 });
 $('effort').addEventListener('change', () => { chrome.storage.local.set({effort: $('effort').value}); msg('Сохранено.', true); });
 
+async function showRoute(fresh = false) {
+  $('route').textContent = fresh ? 'проверяю…' : '…';
+  const r = await chrome.runtime.sendMessage({route: {fresh}}).catch(() => null);
+  $('route').textContent = !r ? '—' : !r.host ? 'нет связи ни с одним' :
+    r.host.replace('https://', '') + (r.ms != null ? ` · ${(r.ms / 1000).toFixed(1).replace('.', ',')} с` : '');
+}
+$('reroute').addEventListener('click', e => { e.preventDefault(); showRoute(true); });
+
 refresh();
+showRoute();
 
 // Also makes the extension pick up an update.cmd run right away.
 chrome.runtime.sendMessage({checkUpdate: true}).then(info => {

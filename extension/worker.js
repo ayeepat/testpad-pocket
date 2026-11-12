@@ -1,4 +1,4 @@
-import {API_URL, DEFAULT_MODEL, openVault, buildBody, parseReply, explainHttp, isParamError} from './lib.js';
+import {API_HOSTS, CHAT_PATH, DEFAULT_MODEL, fastestHost, openVault, buildBody, parseReply, explainHttp, isParamError} from './lib.js';
 
 let active = 0; // solves in flight; never self-reload during one
 const OTP_URL = /^https:\/\/(?:[\w-]+\.)*onlinetestpad\.com\//i;
@@ -13,6 +13,29 @@ async function apiKey() {
 async function settings() {
   const s = await chrome.storage.local.get(['model', 'effort']);
   return {model: (s.model || '').trim() || DEFAULT_MODEL, effort: s.effort ?? 'high'};
+}
+
+/* ---------- which 302.ai address ----------
+ * Probed when a test page opens and kept 10 minutes, so a solve rarely waits for it.
+ * Any network failure or stall forgets it, and the next solve probes again. */
+const ROUTE_TTL = 10 * 60 * 1000;
+let probing = null;
+async function route(fresh = false) {
+  const {route: saved} = await chrome.storage.session.get('route');
+  if (!fresh && saved && Date.now() - saved.at < ROUTE_TTL) return saved;
+  probing ??= fastestHost().then(async best => {
+    if (!best) return {host: null, ms: null, at: Date.now()}; // not cached: try again next time
+    const next = {...best, at: Date.now()};
+    await chrome.storage.session.set({route: next});
+    return next;
+  }).finally(() => { probing = null; });
+  return probing;
+}
+// Forget the host and probe again in the background, so the next solve doesn't wait for it.
+const forgetRoute = () => chrome.storage.session.remove('route').then(() => route(true)).catch(() => {});
+async function hostOrder() {
+  const {host} = await route();
+  return host ? [host, ...API_HOSTS.filter(h => h !== host)] : API_HOSTS;
 }
 
 let formulaCache = null;
@@ -61,16 +84,28 @@ async function solve(task, signal, progress) {
   if (!key) throw Error('Расширение заблокировано. Нажмите на значок TestPad Pocket и введите пароль.');
   const {model, effort} = await settings();
   const image = task.useFormula === false ? null : await formula();
-  const send = withEffort => fetch(API_URL, {
+  const send = (host, withEffort) => fetch(host + CHAT_PATH, {
     method: 'POST', signal,
     headers: {Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', Accept: 'text/event-stream'},
     body: JSON.stringify(buildBody({model, effort: withEffort ? effort : '', task, formula: image})),
   });
   progress('думает');
-  let res = await send(true);
+  // Fastest working host first; one we can't reach (or that rejects the key) hands over to the next.
+  const hosts = await hostOrder();
+  let res, host, skipped = false;
+  for (const [i, h] of hosts.entries()) {
+    host = h;
+    const last = i === hosts.length - 1;
+    try { res = await send(host, true); }
+    catch (err) { if (signal.aborted || last) throw err; skipped = true; continue; }
+    if (res.status === 401 && !last) { skipped = true; continue; }
+    break;
+  }
+  // Skip the dead or key-less host next time too, until the route expires.
+  if (skipped && res?.ok) chrome.storage.session.set({route: {host, ms: null, at: Date.now()}});
   if (!res.ok) {
     const body = await res.text();
-    if (effort && isParamError(res.status, body)) res = await send(false);
+    if (effort && isParamError(res.status, body)) res = await send(host, false);
     else throw Error(explainHttp(res.status, body));
     if (!res.ok) throw Error(explainHttp(res.status, await res.text()));
   }
@@ -87,23 +122,27 @@ chrome.runtime.onConnect.addListener(port => {
   let open = true;
   active++;
   let released = false;
+  const started = Date.now();
+  const stalled = () => Date.now() - started > 60000; // not just a switch to the next question
   const release = () => { if (!released) { released = true; active--; } };
   const post = msg => { if (open) port.postMessage(msg); };
   // An awaited fetch is not an extension event; touching an API keeps the worker alive.
   const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
   const timeout = setTimeout(() => abort.abort(), 150000);
-  port.onDisconnect.addListener(() => { open = false; abort.abort(); clearInterval(keepAlive); clearTimeout(timeout); release(); });
+  port.onDisconnect.addListener(() => { open = false; if (!released && stalled()) forgetRoute(); abort.abort(); clearInterval(keepAlive); clearTimeout(timeout); release(); });
   port.onMessage.addListener(msg => {
     if (!msg.solve) return;
     solve(msg.solve, abort.signal, (stage, chars) => post({stage, chars}))
       .then(result => post({result}))
+      .catch(err => { if (abort.signal.aborted ? stalled() : /failed to fetch|network/i.test(err.message)) forgetRoute(); throw err; })
       .catch(err => post({error: abort.signal.aborted ? 'Нет ответа за 2,5 минуты. Повторите.'
-        : /failed to fetch|network/i.test(err.message) ? 'Нет связи с 302.ai. Проверьте интернет.' : err.message}))
+        : /failed to fetch|network/i.test(err.message) ? 'Нет связи с 302.ai (оба адреса). Проверьте интернет.' : err.message}))
       .finally(() => { clearInterval(keepAlive); clearTimeout(timeout); release(); });
   });
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (msg.warm && sender.tab && sender.frameId === 0 && OTP_URL.test(sender.url || '')) { route().catch(() => {}); return; }
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return; // extension pages only
   if (msg.unlock) {
     (async () => {
@@ -119,6 +158,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     })().then(reply);
     return true;
   }
+  if (msg.route) { route(msg.route.fresh).then(r => reply({...r, hosts: API_HOSTS})); return true; }
   if (msg.checkUpdate) { checkUpdate().then(reply); return true; }
   if (msg.lock) {
     Promise.all([chrome.storage.local.remove('apiKey'), chrome.storage.session.remove('apiKey')]).then(() => reply({ok: true}));

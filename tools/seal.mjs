@@ -8,7 +8,7 @@
 import {writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import readline from 'node:readline';
-import {sealVault, openVault, DEFAULT_MODEL} from '../extension/lib.js';
+import {sealVault, openVault, DEFAULT_MODEL, API_HOSTS} from '../extension/lib.js';
 
 const args = process.argv.slice(2);
 const out = args.includes('--out') ? args[args.indexOf('--out') + 1] : fileURLToPath(new URL('../extension/vault.json', import.meta.url));
@@ -33,7 +33,13 @@ if (password.length < 12) { console.error('Пароль короче 12 симв
 if (!args.includes('--no-check')) {
   process.stdout.write('Проверяю ключ на 302.ai… ');
   try {
-    const res = await fetch('https://api.302.ai/v1/models', {headers: {Authorization: 'Bearer ' + apiKey}, signal: AbortSignal.timeout(20000)});
+    let res, lastErr;
+    for (const host of API_HOSTS) {
+      try { res = await fetch(host + '/v1/models', {headers: {Authorization: 'Bearer ' + apiKey}, signal: AbortSignal.timeout(20000)}); }
+      catch (err) { lastErr = err; continue; }
+      if (res.status !== 401) break;
+    }
+    if (!res) throw lastErr;
     if (res.status === 401) { console.error('ключ не принят (HTTP 401).'); process.exit(1); }
     const ids = res.ok ? ((await res.json()).data || []).map(m => m.id) : [];
     if (!res.ok) console.log(`HTTP ${res.status}, продолжаю.`);

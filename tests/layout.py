@@ -29,7 +29,11 @@ body{{margin:0;background:#eceff1;font:15px Arial,sans-serif}} .wrap{{display:fl
 <div class="adright">{tile("NIKE SB",160)}{tile("STUSSY",160)}{tile("FRED PERRY",160)}</div></div></body></html>'''
 
 held = []
-def api(route): held.append(route)  # answered later from the main flow, so the page can be seen mid-solve
+def api(route):
+    if not route.request.headers.get('authorization'):  # the route probe: answer like the 302.ai gateway
+        if route.request.method == 'GET': return route.fulfill(body='<html>' + 'x' * 24000 + '</html>', content_type='text/html')
+        return route.fulfill(status=401, body='{"error":{"message":"Missing 302 Apikey"}}', content_type='application/json')
+    held.append(route)  # answered later from the main flow, so the page can be seen mid-solve
 def answer_held():
     route = held.pop()
     answer = json.dumps({'work': 'ИТ — совокупность методов и средств обработки информации.', 'answer': '2) совокупность методов…', 'values': ['2']}, ensure_ascii=False)
@@ -44,6 +48,7 @@ with sync_playwright() as p:
         args=[f'--disable-extensions-except={ext}', f'--load-extension={ext}'])
     ctx.route('https://onlinetestpad.com/**', lambda r: r.fulfill(body=html, content_type='text/html; charset=utf-8'))
     ctx.route('https://api.302.ai/**', api)
+    ctx.route('https://api.302ai.cn/**', api)
     w = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event('serviceworker')
     eid = w.url.split('/')[2]
     pop = ctx.new_page(); pop.goto(f'chrome-extension://{eid}/extension/popup.html')
