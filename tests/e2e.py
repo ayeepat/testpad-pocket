@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parent.parent
 PASSWORD = 'e2e-password-long'
 POLZA_PASSWORD = 'e2e-polza-password'
+NAMED_PASSWORD = 'e2e-named-password'
 tmp = Path(tempfile.mkdtemp(prefix='tpp-e2e-'))
 ext = tmp / 'ext'
 shutil.copytree(ROOT, ext, ignore=shutil.ignore_patterns('.git', 'tests', 'node_modules'))
@@ -20,6 +21,12 @@ assert same.returncode == 1 and 'уже открывает' in same.stderr, 'sea
 subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--provider', 'polza', '--no-check', '--out', str(ext / 'extension/vault.json')],
                env={**seal_env, 'VAULT_PASSWORD': POLZA_PASSWORD}, check=True, capture_output=True)
 assert [e['provider'] for e in json.loads((ext / 'extension/vault.json').read_text())] == ['302', 'polza']
+# A named account is a third entry; the browser below unlocks Polza.ai through it.
+subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--provider', 'polza', '--name', 'E2E', '--no-check', '--out', str(ext / 'extension/vault.json')],
+               env={**seal_env, 'API_KEY': 'pz-named', 'VAULT_PASSWORD': NAMED_PASSWORD}, check=True, capture_output=True)
+listed = subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--list', '--out', str(ext / 'extension/vault.json')],
+                        capture_output=True, text=True, check=True).stdout
+assert '(без имени) — Polza.ai' in listed and 'E2E — Polza.ai' in listed and 'хранилище: 3' in listed, listed
 html = (ROOT / 'tests/fixtures/onlinetestpad.html').read_text()
 requests, mode = [], {'v': 'ok', 'api.302ai.cn': 'ok', 'api.302.ai': 'ok', 'api.polza.ai': 'ok'}
 GATEWAY_401 = '{"error":{"err_code":-10001,"message":"Missing 302 Apikey"}}'
@@ -281,8 +288,8 @@ with sync_playwright() as p:
     assert 'заблокировано' in open_answer(page).lower(), 'locked message'
     print('restart persistence + sign-out: ok')
 
-    # The second password opens the Polza.ai key: same panel, requests go to Polza.ai only.
-    popup.fill('#pass', POLZA_PASSWORD); popup.click('#go')
+    # A named account's password opens its Polza.ai key: same panel, requests go to Polza.ai only.
+    popup.fill('#pass', NAMED_PASSWORD); popup.click('#go')
     wait(lambda: popup.is_visible('#ready'), 'unlocked with the Polza.ai password')
     wait(lambda: popup.text_content('#route').startswith('api.polza.ai'), 'popup shows Polza.ai')
     assert popup.text_content('#model-label') == 'Модель Polza.ai' and popup.get_attribute('#model', 'placeholder') == 'google/gemini-3.8-flash'
@@ -291,7 +298,7 @@ with sync_playwright() as p:
     time.sleep(0.3); page.keyboard.press('Control+Shift+9')
     assert 'Ответ: совокупность' in open_answer(page), 'Polza.ai solve'
     assert [r['host'] for r in requests[n:]] == ['api.polza.ai'], requests[n:]
-    assert requests[-1]['auth'] == 'Bearer pz-e2e' and requests[-1]['body']['model'] == 'google/gemini-3.8-flash'
+    assert requests[-1]['auth'] == 'Bearer pz-named' and requests[-1]['body']['model'] == 'google/gemini-3.8-flash'
     mode['v'] = 'unauthorized'
     page.evaluate("document.querySelector('.qtext').textContent = 'Через Polza 2'")
     time.sleep(0.3); page.keyboard.press('Control+Shift+9')

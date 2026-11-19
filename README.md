@@ -2,7 +2,7 @@
 
 A tiny Russian-language solver for OnlineTestPad. It sends the current question to Gemini 3.8 Flash on 302.ai or Polza.ai, shows a short worked solution with the answer, and fills the answer in. It never presses «Далее» or «Завершить».
 
-There are two passwords, one per provider. The password typed into the extension decides where its requests go: one opens the 302.ai key, the other opens the Polza.ai key (`google/gemini-3.8-flash` on `api.polza.ai`). Everything else works the same. The address probe below only applies to 302.ai, because Polza.ai has a single address.
+Every password opens one key, and the key decides where requests go: the main 302.ai key, the main Polza.ai key (`google/gemini-3.8-flash` on `api.polza.ai`), or a named account, which is someone's own key on either provider behind their own password. Everything else works the same. The address probe below only applies to 302.ai, because Polza.ai has a single address.
 
 302.ai has two addresses with the same key: `api.302.ai` (Microsoft Azure) and the mirror `api.302ai.cn` (Alibaba Cloud). In Russia, ISPs let small requests to `api.302.ai` through but freeze bigger ones, so a plain ping can't tell which works. When a test page opens, the extension sends each address a free, keyless probe that moves a 24 KB page down and a 96 KB body up, then uses the first one to finish. The choice lasts 10 minutes. A failed or stalled solve forgets it, and a key the mirror doesn't accept moves the solve to the other address. The popup shows the current server under **Дополнительно**, with a link to check again.
 
@@ -19,11 +19,16 @@ The keys are stored in `extension/vault.json`, each encrypted with its own passw
 On your own computer, from the repo folder (needs Node 20+):
 
 ```
-node tools/seal.mjs                    # 302.ai key + its password
-node tools/seal.mjs --provider polza   # Polza.ai key + a different password
+node tools/seal.mjs                                # main 302.ai key + its password
+node tools/seal.mjs --provider polza               # main Polza.ai key + a different password
+node tools/seal.mjs --provider polza --name Liza   # a named account: someone's own key + their password
+node tools/seal.mjs --list                         # what's in the vault (no password needed)
+node tools/seal.mjs --remove Liza                  # delete a named account
 ```
 
-Each run asks for the key and a new password (at least 12 characters), checks the key and model with that provider, and saves the entry in `extension/vault.json` next to the other one. It refuses a password that already opens the other key. Commit and push that file. Run it again any time to change one provider's key or password. The other entry stays as it is.
+Each run asks for the key and a new password (at least 12 characters), checks the key and model with that provider, and saves the entry in `extension/vault.json` next to the others. It refuses a password that already opens another entry. Commit and push that file, then whoever uses that password runs `update.cmd` / `update.command` and types it into the extension.
+
+Run it again any time to change a key or password. With `--name`, it replaces only the account with that name. Without `--name`, it replaces only that provider's main (unnamed) key. Every other entry stays as it is. The extension needs no change for a new account: it tries the typed password on every entry.
 
 ## On any computer
 
@@ -55,6 +60,6 @@ The panel looks like one more ad tile («РЕКЛАМА» label, white card) and
 ## Tests
 
 ```
-npm test               # vault crypto, prompt, reply parsing
+npm test               # vault crypto, seal tool, prompt, reply parsing
 python3 tests/e2e.py   # real Chromium + the extension on an OnlineTestPad page; 302.ai and Polza.ai stubbed
 ```
