@@ -31,6 +31,14 @@ export async function fastestHost(hosts = API_HOSTS, timeoutMs = 12000) {
   finally { clearTimeout(timer); stop.abort(); }
 }
 export const DEFAULT_MODEL = 'gemini-3.8-flash';
+
+// Each password in vault.json opens one key, and the key's provider decides where requests go.
+// Only 302.ai needs the address probe; Polza.ai has one address.
+export const PROVIDERS = {
+  '302': {name: '302.ai', hosts: API_HOSTS, model: DEFAULT_MODEL},
+  polza: {name: 'Polza.ai', hosts: ['https://api.polza.ai/api'], model: 'google/gemini-3.8-flash'},
+};
+export const provider = id => PROVIDERS[id] || PROVIDERS['302']; // keys unlocked before 2.3 have no provider
 export const ITERATIONS = 600000;
 
 const enc = new TextEncoder();
@@ -43,13 +51,27 @@ async function deriveKey(password, salt, iterations) {
     {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt']);
 }
 
-/** Encrypts the 302.ai key with the password. The result is safe to publish. */
-export async function sealVault(apiKey, password) {
+/** Encrypts an API key with the password. The result is safe to publish. */
+export async function sealVault(apiKey, password, providerId = '302') {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await deriveKey(password, salt, ITERATIONS);
   const data = await crypto.subtle.encrypt({name: 'AES-GCM', iv}, key, enc.encode(apiKey.trim()));
-  return {v: 1, kdf: 'PBKDF2-SHA256', iterations: ITERATIONS, salt: b64(salt), iv: b64(iv), data: b64(new Uint8Array(data))};
+  return {v: 1, provider: providerId, kdf: 'PBKDF2-SHA256', iterations: ITERATIONS, salt: b64(salt), iv: b64(iv), data: b64(new Uint8Array(data))};
+}
+
+/** vault.json is a list of sealed keys (or a single one, before 2.3). */
+export const vaultEntries = file => (Array.isArray(file) ? file : file ? [file] : []);
+
+/** Tries the password on every entry. Returns {key, provider}, or throws Error('wrong-password'). */
+export async function openAny(file, password) {
+  const entries = vaultEntries(file);
+  if (!entries.length) throw Error('bad-vault');
+  for (const entry of entries) {
+    try { return {key: await openVault(entry, password), provider: entry.provider || '302'}; }
+    catch (err) { if (err.message !== 'wrong-password') throw err; }
+  }
+  throw Error('wrong-password');
 }
 
 /** Returns the API key, or throws Error('wrong-password'). */
@@ -117,16 +139,17 @@ export function parseReply(raw) {
   return {work: text.replace(/^```\w*\s*|```$/g, '').trim(), answer: '', values: []};
 }
 
-/** Human-readable Russian message for a 302.ai failure. */
-export function explainHttp(status, bodyText) {
+/** Human-readable Russian message for a provider failure. */
+export function explainHttp(status, bodyText, name = '302.ai') {
   const msg = (() => { try { const j = JSON.parse(bodyText); return j.error?.message || j.message || j.error || ''; } catch { return bodyText || ''; } })();
   const lower = String(msg).toLowerCase();
-  if (status === 401) return 'Ключ 302.ai не принят. Пересоздайте хранилище: node tools/seal.mjs';
-  if (status === 402 || /balance|余额|insufficient|quota/.test(lower)) return 'На балансе 302.ai закончились средства.';
+  if (status === 401) return `Ключ ${name} не принят. Пересоздайте хранилище: node tools/seal.mjs`;
+  if (status === 402 || /balance|余额|insufficient|quota|баланс|недостаточно средств/.test(lower)) return `На балансе ${name} закончились средства.`;
   if (status === 429) return 'Слишком много запросов. Подождите несколько секунд.';
-  if (/model/.test(lower) && /(not|exist|support|found|invalid)/.test(lower)) return 'Модель не найдена на 302.ai. Смените её в меню расширения → Дополнительно.';
-  return `302.ai: HTTP ${status}${msg ? ' — ' + String(msg).slice(0, 160) : ''}`;
+  if ((/model/.test(lower) && /(not|exist|support|found|invalid)/.test(lower)) || /модел.*не (найден|поддерж|существ)/.test(lower))
+    return `Модель не найдена на ${name}. Смените её в меню расширения → Дополнительно.`;
+  return `${name}: HTTP ${status}${msg ? ' — ' + String(msg).slice(0, 160) : ''}`;
 }
 
-/** 302.ai's "Parameter error" — retry once without reasoning_effort. */
+/** "Parameter error" — retry once without reasoning_effort. */
 export const isParamError = (status, bodyText) => status === 400 && /-10003|parameter|reasoning/i.test(bodyText || '');

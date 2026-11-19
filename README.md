@@ -1,6 +1,8 @@
 # TestPad Pocket
 
-A tiny Russian-language solver for OnlineTestPad. It sends the current question to Gemini 3.8 Flash on 302.ai, shows a short worked solution with the answer, and fills the answer in. It never presses «Далее» or «Завершить».
+A tiny Russian-language solver for OnlineTestPad. It sends the current question to Gemini 3.8 Flash on 302.ai or Polza.ai, shows a short worked solution with the answer, and fills the answer in. It never presses «Далее» or «Завершить».
+
+There are two passwords, one per provider. The password typed into the extension decides where its requests go: one opens the 302.ai key, the other opens the Polza.ai key (`google/gemini-3.8-flash` on `api.polza.ai`). Everything else works the same. The address probe below only applies to 302.ai, because Polza.ai has a single address.
 
 302.ai has two addresses with the same key: `api.302.ai` (Microsoft Azure) and the mirror `api.302ai.cn` (Alibaba Cloud). In Russia, ISPs let small requests to `api.302.ai` through but freeze bigger ones, so a plain ping can't tell which works. When a test page opens, the extension sends each address a free, keyless probe that moves a 24 KB page down and a 96 KB body up, then uses the first one to finish. The choice lasts 10 minutes. A failed or stalled solve forgets it, and a key the mirror doesn't accept moves the solve to the other address. The popup shows the current server under **Дополнительно**, with a link to check again.
 
@@ -10,17 +12,18 @@ To see from a given computer which address works and whether the key is accepted
 node tools/check.mjs
 ```
 
-Your 302.ai key is stored in `extension/vault.json`, encrypted with your password (PBKDF2-SHA256, 600 000 rounds + AES-256-GCM). Without the password the file is useless, so the repo can stay public. No server is involved.
+The keys are stored in `extension/vault.json`, each encrypted with its own password (PBKDF2-SHA256, 600 000 rounds + AES-256-GCM). Without the password the file is useless, so the repo can stay public. No server is involved.
 
-## One-time: seal your key
+## One-time: seal your keys
 
 On your own computer, from the repo folder (needs Node 20+):
 
 ```
-node tools/seal.mjs
+node tools/seal.mjs                    # 302.ai key + its password
+node tools/seal.mjs --provider polza   # Polza.ai key + a different password
 ```
 
-It asks for the 302.ai key and a new password (at least 12 characters), checks the key and model on 302.ai, and writes `extension/vault.json`. Commit and push that file. Run it again any time to change the key or the password.
+Each run asks for the key and a new password (at least 12 characters), checks the key and model with that provider, and saves the entry in `extension/vault.json` next to the other one. It refuses a password that already opens the other key. Commit and push that file. Run it again any time to change one provider's key or password. The other entry stays as it is.
 
 ## On any computer
 
@@ -47,11 +50,11 @@ Hiding removes the panel from the page completely. The answer is kept, so pressi
 
 The panel looks like one more ad tile («РЕКЛАМА» label, white card) and sits on top of an ad block next to the test. With no ads on screen, it goes to the bottom right. Its header has a tiny eye and a tiny «?» button (solve). Answers never open by themselves: click the eye to read one, and click it again to fold it. Every new answer and every new question starts folded. The eye and «?» stay in the same spot whether the card is open or folded. While a solve is running the «?» is faded and can't be pressed. When it's done, a small green dot appears on the eye (red means an error, so open the eye to read it). If nothing comes back within 100 seconds, the «?» works again. The answer appears in bold, with the short solution under it. Autofill handles radio buttons, checkboxes, text and number fields, and dropdowns. When a field can't be filled, the panel says so. Always check the answer before moving on, because the model can be wrong.
 
-**Дополнительно** in the popup has two settings. Thinking depth: high (the default, more accurate) or medium (faster). The model name can be changed there if 302.ai renames the model.
+**Дополнительно** in the popup has two settings. Thinking depth: high (the default, more accurate) or medium (faster). The model name can be changed there if the provider renames the model. The field shows which provider this computer is using, and the **Сервер** line shows its address.
 
 ## Tests
 
 ```
 npm test               # vault crypto, prompt, reply parsing
-python3 tests/e2e.py   # real Chromium + the extension on an OnlineTestPad page; 302.ai stubbed
+python3 tests/e2e.py   # real Chromium + the extension on an OnlineTestPad page; 302.ai and Polza.ai stubbed
 ```

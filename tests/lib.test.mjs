@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import {sealVault, openVault, parseReply, buildBody, describeTask, explainHttp, isParamError, DEFAULT_MODEL, probeHost, fastestHost} from '../extension/lib.js';
+import {sealVault, openVault, openAny, provider, parseReply, buildBody, describeTask, explainHttp, isParamError, DEFAULT_MODEL, probeHost, fastestHost} from '../extension/lib.js';
 
 test('vault round-trips and rejects a wrong password', async () => {
   const vault = await sealVault('  sk-test-123  ', 'correct horse battery');
@@ -11,6 +11,19 @@ test('vault round-trips and rejects a wrong password', async () => {
   await assert.rejects(openVault(vault, 'correct horse batterY'), /wrong-password/);
   const other = await sealVault('sk-test-123', 'correct horse battery');
   assert.notEqual(other.data, vault.data, 'fresh salt and IV each time');
+});
+
+test('each password opens its own provider; a pre-2.3 single vault still opens as 302.ai', async () => {
+  const a = await sealVault('sk-302', 'first password long', '302');
+  const b = await sealVault('pz-key', 'second password long', 'polza');
+  assert.deepEqual(await openAny([a, b], 'second password long'), {key: 'pz-key', provider: 'polza'});
+  assert.deepEqual(await openAny([a, b], 'first password long'), {key: 'sk-302', provider: '302'});
+  await assert.rejects(openAny([a, b], 'nope nope nope'), /wrong-password/);
+  const {provider: _, ...old} = a;
+  assert.deepEqual(await openAny(old, 'first password long'), {key: 'sk-302', provider: '302'});
+  assert.equal(provider('polza').hosts[0], 'https://api.polza.ai/api');
+  assert.equal(provider(undefined).name, '302.ai');
+  assert.match(explainHttp(401, '', 'Polza.ai'), /Ключ Polza\.ai/);
 });
 
 test('parseReply tolerates fences, prose, numbers and raw newlines', () => {

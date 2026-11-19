@@ -6,14 +6,22 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 PASSWORD = 'e2e-password-long'
+POLZA_PASSWORD = 'e2e-polza-password'
 tmp = Path(tempfile.mkdtemp(prefix='tpp-e2e-'))
 ext = tmp / 'ext'
 shutil.copytree(ROOT, ext, ignore=shutil.ignore_patterns('.git', 'tests', 'node_modules'))
 subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--no-check', '--out', str(ext / 'extension/vault.json')],
                env={'PATH': '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', 'API_302_KEY': 'sk-e2e', 'VAULT_PASSWORD': PASSWORD},
                check=True, capture_output=True)
+seal_env = {'PATH': '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', 'API_KEY': 'pz-e2e'}
+same = subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--provider', 'polza', '--no-check', '--out', str(ext / 'extension/vault.json')],
+                      env={**seal_env, 'VAULT_PASSWORD': PASSWORD}, capture_output=True, text=True)
+assert same.returncode == 1 and 'уже открывает' in same.stderr, 'seal refuses a password that opens the other key'
+subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--provider', 'polza', '--no-check', '--out', str(ext / 'extension/vault.json')],
+               env={**seal_env, 'VAULT_PASSWORD': POLZA_PASSWORD}, check=True, capture_output=True)
+assert [e['provider'] for e in json.loads((ext / 'extension/vault.json').read_text())] == ['302', 'polza']
 html = (ROOT / 'tests/fixtures/onlinetestpad.html').read_text()
-requests, mode = [], {'v': 'ok', 'api.302ai.cn': 'ok', 'api.302.ai': 'ok'}
+requests, mode = [], {'v': 'ok', 'api.302ai.cn': 'ok', 'api.302.ai': 'ok', 'api.polza.ai': 'ok'}
 GATEWAY_401 = '{"error":{"err_code":-10001,"message":"Missing 302 Apikey"}}'
 LANDING = '<html>' + 'x' * 24000 + '</html>'
 
@@ -48,6 +56,7 @@ def launch(p, profile):
     ctx.route('https://onlinetestpad.com/**', lambda r: r.fulfill(body=html, content_type='text/html; charset=utf-8'))
     ctx.route('https://api.302.ai/**', api)
     ctx.route('https://api.302ai.cn/**', api)
+    ctx.route('https://api.polza.ai/**', api)
     worker = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event('serviceworker')
     return ctx, worker.url.split('/')[2]
 
@@ -271,6 +280,26 @@ with sync_playwright() as p:
     time.sleep(0.3); page.keyboard.press('Control+Shift+9')
     assert 'заблокировано' in open_answer(page).lower(), 'locked message'
     print('restart persistence + sign-out: ok')
+
+    # The second password opens the Polza.ai key: same panel, requests go to Polza.ai only.
+    popup.fill('#pass', POLZA_PASSWORD); popup.click('#go')
+    wait(lambda: popup.is_visible('#ready'), 'unlocked with the Polza.ai password')
+    wait(lambda: popup.text_content('#route').startswith('api.polza.ai'), 'popup shows Polza.ai')
+    assert popup.text_content('#model-label') == 'Модель Polza.ai' and popup.get_attribute('#model', 'placeholder') == 'google/gemini-3.8-flash'
+    n = len(requests)
+    page.evaluate("document.querySelector('.qtext').textContent = 'Через Polza'")
+    time.sleep(0.3); page.keyboard.press('Control+Shift+9')
+    assert 'Ответ: совокупность' in open_answer(page), 'Polza.ai solve'
+    assert [r['host'] for r in requests[n:]] == ['api.polza.ai'], requests[n:]
+    assert requests[-1]['auth'] == 'Bearer pz-e2e' and requests[-1]['body']['model'] == 'google/gemini-3.8-flash'
+    mode['v'] = 'unauthorized'
+    page.evaluate("document.querySelector('.qtext').textContent = 'Через Polza 2'")
+    time.sleep(0.3); page.keyboard.press('Control+Shift+9')
+    assert 'Ключ Polza.ai не принят' in open_answer(page), 'Polza.ai auth error named'
+    mode['v'] = 'ok'
+    popup.click('#lock')  # «Дополнительно» is still open from the sign-out above
+    wait(lambda: popup.is_visible('#unlock'), 'locked again')
+    print('second password -> Polza.ai: ok')
 
     # Updates: the popup reports a newer GitHub version, and new files on disk make the extension reload itself.
     # (Here the extension is loaded from the command line, which Chromium disables on reload; a "Load unpacked"

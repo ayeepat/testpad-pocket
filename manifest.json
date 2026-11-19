@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "TestPad Pocket",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Краткое решение текущей задачи OnlineTestPad.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "alarms", "scripting"],
   "host_permissions": [
     "https://api.302ai.cn/*",
     "https://api.302.ai/*",
+    "https://api.polza.ai/*",
     "https://raw.githubusercontent.com/ayeepat/testpad-pocket/*",
     "https://onlinetestpad.com/*",
     "https://*.onlinetestpad.com/*"

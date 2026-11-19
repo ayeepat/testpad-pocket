@@ -1,4 +1,4 @@
-import {DEFAULT_MODEL} from './lib.js';
+import {provider} from './lib.js';
 
 const $ = id => document.getElementById(id);
 const msg = (text, ok = false) => { $('msg').textContent = text; $('msg').className = ok ? 'ok' : ''; };
@@ -10,14 +10,17 @@ function pretty(shortcut) {
 }
 
 async function refresh() {
-  const [{apiKey: saved, model, effort}, {apiKey: temp}] = await Promise.all([
-    chrome.storage.local.get(['apiKey', 'model', 'effort']), chrome.storage.session.get('apiKey')]);
+  const [{apiKey: saved, provider: savedProv, model, effort}, {apiKey: temp, provider: tempProv}] = await Promise.all([
+    chrome.storage.local.get(['apiKey', 'provider', 'model', 'effort']), chrome.storage.session.get(['apiKey', 'provider'])]);
   const unlocked = !!(saved || temp);
+  const prov = provider(temp ? tempProv : savedProv);
+  $('model-label').textContent = 'Модель ' + prov.name;
+  $('model').placeholder = prov.model;
   $('title').className = unlocked ? 'on' : '';
   $('state').textContent = unlocked ? (saved ? 'Готово' : 'Готово до закрытия браузера') : 'Заблокировано';
   $('unlock').hidden = unlocked;
   $('ready').hidden = !unlocked;
-  $('model').value = model && model !== DEFAULT_MODEL ? model : '';
+  $('model').value = model && model !== prov.model ? model : '';
   $('effort').value = effort || 'high';
   const commands = await chrome.commands.getAll();
   const key = name => commands.find(c => c.name === name)?.shortcut;
@@ -36,6 +39,7 @@ $('unlock').addEventListener('submit', async e => {
   $('pass').value = '';
   msg('Открыто. Окно можно закрыть.', true);
   refresh();
+  showRoute();
 });
 
 $('lock').addEventListener('click', async () => {
@@ -55,7 +59,7 @@ async function showRoute(fresh = false) {
   $('route').textContent = fresh ? 'проверяю…' : '…';
   const r = await chrome.runtime.sendMessage({route: {fresh}}).catch(() => null);
   $('route').textContent = !r ? '—' : !r.host ? 'нет связи ни с одним' :
-    r.host.replace('https://', '') + (r.ms != null ? ` · ${(r.ms / 1000).toFixed(1).replace('.', ',')} с` : '');
+    new URL(r.host).host + (r.ms != null ? ` · ${(r.ms / 1000).toFixed(1).replace('.', ',')} с` : '');
 }
 $('reroute').addEventListener('click', e => { e.preventDefault(); showRoute(true); });
 

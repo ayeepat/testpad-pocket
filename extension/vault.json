@@ -1,8 +1,19 @@
-{
-  "v": 1,
-  "kdf": "PBKDF2-SHA256",
-  "iterations": 600000,
-  "salt": "/Ua9ptFhrD6MB1ei4QMmUQ==",
-  "iv": "Q2itesNDRo0SChXs",
-  "data": "9wZJAk/bCNC7+2+CCiQZepYntYurEEmlbRclS7D8ELOZ0ZtO1AOz5+eBWqfDW86a/lfBwc4ABlIHfNyK8dBAeiMSGA=="
-}
+[
+  {
+    "v": 1,
+    "kdf": "PBKDF2-SHA256",
+    "iterations": 600000,
+    "salt": "/Ua9ptFhrD6MB1ei4QMmUQ==",
+    "iv": "Q2itesNDRo0SChXs",
+    "data": "9wZJAk/bCNC7+2+CCiQZepYntYurEEmlbRclS7D8ELOZ0ZtO1AOz5+eBWqfDW86a/lfBwc4ABlIHfNyK8dBAeiMSGA=="
+  },
+  {
+    "v": 1,
+    "provider": "polza",
+    "kdf": "PBKDF2-SHA256",
+    "iterations": 600000,
+    "salt": "Ur3venYJawEugfnXBxe0uw==",
+    "iv": "BcDRQ65wBfUkDMD6",
+    "data": "o7x10OTf7AXCUwLUl2Z2W1otwMWqXoNjYNnunAzn8xuGxu2jRqoLqFEI/nZCnvwP39ps7w=="
+  }
+]
