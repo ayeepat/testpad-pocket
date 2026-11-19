@@ -1,11 +1,17 @@
 [
   {
     "v": 1,
+    "provider": "302",
     "kdf": "PBKDF2-SHA256",
     "iterations": 600000,
-    "salt": "/Ua9ptFhrD6MB1ei4QMmUQ==",
-    "iv": "Q2itesNDRo0SChXs",
-    "data": "9wZJAk/bCNC7+2+CCiQZepYntYurEEmlbRclS7D8ELOZ0ZtO1AOz5+eBWqfDW86a/lfBwc4ABlIHfNyK8dBAeiMSGA=="
+    "salt": "pcWhlYNt4VBYeWXxH6hXhQ==",
+    "iv": "2U6qRDzep6qdP6Nx",
+    "data": "+SUKWIRKQjEaEZXv7sVkc9FuB5QTRoEbC1XwioR1XpH6sz+82Ga1x7Cs+qhag4U+mZq1iaVVxHOAT8H6cvcNKDyTMg==",
+    "race": {
+      "provider": "polza",
+      "iv": "oJTcsiW+Jl3Cpu7X",
+      "data": "Ppxy7BJ5Ay6fIDpZPOQTeKjARzfSY+prWePOgDSGaJeyYhqxGn0zHyBTzTd7osnd6KXQuw=="
+    }
   },
   {
     "v": 1,

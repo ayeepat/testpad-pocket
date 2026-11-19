@@ -62,3 +62,43 @@ test('named accounts sit next to the unnamed ones and replace only themselves', 
   assert.match(removed.stdout, /Ключей в хранилище: 2/);
   assert.deepEqual(read(out), after.slice(0, 2));
 });
+
+test('--race adds a second key to the account its password opens, and --race off takes it away', async () => {
+  const out = join(mkdtempSync(join(tmpdir(), 'tpp-race-')), 'vault.json');
+  const run = (args, env) => seal(out, args, env);
+  for (const [args, key, password] of [[[], 'sk-302', 'password for 302'], [['--provider', 'polza'], 'pz-main', 'password for polza'],
+    [['--provider', 'polza', '--name', 'Liza'], 'pz-liza', 'password for liza']]) {
+    assert.equal((await run(args, {API_KEY: key, VAULT_PASSWORD: password})).code, 0);
+  }
+  const before = read(out);
+
+  const added = await run(['--race', 'polza'], {VAULT_PASSWORD: 'password for 302', RACE_KEY: 'pz-race'});
+  assert.equal(added.code, 0, added.stderr);
+  assert.match(added.stdout, /\(без имени\) — 302\.ai \+ Polza\.ai \(гонка\)\n {2}\(без имени\) — Polza\.ai\n {2}Liza — Polza\.ai/);
+  const after = read(out);
+  assert.deepEqual(after.slice(1), before.slice(1), 'other accounts untouched');
+  assert.deepEqual(await openAny(after, 'password for 302'), {key: 'sk-302', provider: '302', race: {key: 'pz-race', provider: 'polza'}});
+  assert.deepEqual(await openAny(after, 'password for liza'), {key: 'pz-liza', provider: 'polza'});
+
+  // Wrong password, or a second key on the account's own provider: refused, vault unchanged.
+  const wrong = await run(['--race', 'polza'], {VAULT_PASSWORD: 'not a password here', RACE_KEY: 'x'});
+  assert.equal(wrong.code, 1);
+  assert.match(wrong.stderr, /не открывает ни один ключ/);
+  const same = await run(['--race', 'polza'], {VAULT_PASSWORD: 'password for liza', RACE_KEY: 'x'});
+  assert.equal(same.code, 1);
+  assert.match(same.stderr, /Второй должен быть на другом провайдере/);
+  assert.deepEqual(read(out), after);
+
+  // A new 302.ai key with the same password keeps the second key; a new password drops it, with a note.
+  assert.equal((await run([], {API_KEY: 'sk-302-new', VAULT_PASSWORD: 'password for 302'})).code, 0);
+  assert.deepEqual(await openAny(read(out), 'password for 302'), {key: 'sk-302-new', provider: '302', race: {key: 'pz-race', provider: 'polza'}});
+  const moved = await run([], {API_KEY: 'sk-302-new', VAULT_PASSWORD: 'brand new password'});
+  assert.match(moved.stdout, /не перенесён: пароль новый/);
+  assert.deepEqual(await openAny(read(out), 'brand new password'), {key: 'sk-302-new', provider: '302'});
+
+  assert.equal((await run(['--race', 'polza'], {VAULT_PASSWORD: 'brand new password', RACE_KEY: 'pz-race'})).code, 0);
+  const off = await run(['--race', 'off'], {VAULT_PASSWORD: 'brand new password'});
+  assert.equal(off.code, 0, off.stderr);
+  assert.deepEqual(await openAny(read(out), 'brand new password'), {key: 'sk-302-new', provider: '302'});
+  assert.equal((await run(['--race', 'off'], {VAULT_PASSWORD: 'brand new password'})).code, 1, 'nothing to take away');
+});

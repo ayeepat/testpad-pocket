@@ -1,16 +1,22 @@
-import {API_HOSTS, CHAT_PATH, provider, fastestHost, openAny, buildBody, parseReply, explainHttp, isParamError} from './lib.js';
+import {API_HOSTS, provider, fastestHost, openAny, ask, race, sameAnswer} from './lib.js';
 
 let active = 0; // solves in flight; never self-reload during one
 const OTP_URL = /^https:\/\/(?:[\w-]+\.)*onlinetestpad\.com\//i;
+const KEYS = ['apiKey', 'provider', 'raceKey', 'raceProvider'];
 
-/** The unlocked key and its provider id ('302' or 'polza'), or null. */
+/** The unlocked key and its provider id ('302' or 'polza'), or null.
+ *  race: {key, provider} when the account has a second key and this computer hasn't turned it off. */
 async function creds() {
-  const temp = await chrome.storage.session.get(['apiKey', 'provider']);
-  if (temp.apiKey) return {key: temp.apiKey, provider: temp.provider || '302'};
-  const saved = await chrome.storage.local.get(['apiKey', 'provider']);
-  return saved.apiKey ? {key: saved.apiKey, provider: saved.provider || '302'} : null;
+  const temp = await chrome.storage.session.get(KEYS);
+  const s = temp.apiKey ? temp : await chrome.storage.local.get(KEYS);
+  if (!s.apiKey) return null;
+  const {raceOff} = await chrome.storage.local.get('raceOff');
+  const c = {key: s.apiKey, provider: s.provider || '302'};
+  if (s.raceKey && !raceOff) c.race = {key: s.raceKey, provider: s.raceProvider};
+  return c;
 }
 const providerId = async () => (await creds())?.provider || '302';
+const uses302 = c => c?.provider === '302' || c?.race?.provider === '302';
 
 async function settings(id) {
   const s = await chrome.storage.local.get(['model', 'effort']);
@@ -50,73 +56,21 @@ async function formula() {
   return (formulaCache = 'data:image/jpeg;base64,' + btoa(bin));
 }
 
-/** Reads an OpenAI-style SSE stream (or a plain JSON body) and returns the message text. */
-async function readCompletion(res, onChunk, name) { // onChunk(chars so far)
-  if (!/event-stream/i.test(res.headers.get('content-type') || '')) {
-    const json = await res.json();
-    return json.choices?.[0]?.message?.content || '';
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '', text = '';
-  for (;;) {
-    const {value, done} = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, {stream: true});
-    let nl;
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') return text;
-      try {
-        const json = JSON.parse(data);
-        if (json.error) throw Error(json.error.message || `Ошибка ${name} во время ответа.`);
-        const delta = json.choices?.[0]?.delta?.content;
-        if (typeof delta === 'string' && delta) { text += delta; onChunk(text.length); }
-      } catch (err) { if (err.message && !(err instanceof SyntaxError)) throw err; }
-    }
-  }
-  return text;
+/** One provider's solve. 302.ai goes to its fastest working address first, and remembers
+ *  a dead or key-less address it had to skip until the route expires. */
+async function solveOn({key, provider: id}, task, image, signal, main) {
+  const {model, effort} = await settings(id);
+  const is302 = id === '302';
+  const hosts = is302 ? await hostOrder() : provider(id).hosts;
+  // A model name typed in the popup is for the main provider; the second one keeps its default.
+  const {reply, host, skipped} = await ask({key, id, hosts, model: main ? model : provider(id).model, effort, task, formula: image, signal});
+  if (is302 && skipped) chrome.storage.session.set({route: {host, ms: null, at: Date.now()}});
+  return reply;
 }
 
-async function solve(task, signal, progress) {
-  const c = await creds();
-  if (!c) throw Error('Расширение заблокировано. Нажмите на значок TestPad Pocket и введите пароль.');
-  const {key} = c, prov = provider(c.provider), is302 = prov === provider('302');
-  const {model, effort} = await settings(c.provider);
-  const image = task.useFormula === false ? null : await formula();
-  const send = (host, withEffort) => fetch(host + CHAT_PATH, {
-    method: 'POST', signal,
-    headers: {Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', Accept: 'text/event-stream'},
-    body: JSON.stringify(buildBody({model, effort: withEffort ? effort : '', task, formula: image})),
-  });
-  progress('думает');
-  // Fastest working host first; one we can't reach (or that rejects the key) hands over to the next.
-  const hosts = is302 ? await hostOrder() : prov.hosts;
-  let res, host, skipped = false;
-  for (const [i, h] of hosts.entries()) {
-    host = h;
-    const last = i === hosts.length - 1;
-    try { res = await send(host, true); }
-    catch (err) { if (signal.aborted || last) throw err; skipped = true; continue; }
-    if (res.status === 401 && !last) { skipped = true; continue; }
-    break;
-  }
-  // Skip the dead or key-less host next time too, until the route expires.
-  if (is302 && skipped && res?.ok) chrome.storage.session.set({route: {host, ms: null, at: Date.now()}});
-  if (!res.ok) {
-    const body = await res.text();
-    if (effort && isParamError(res.status, body)) res = await send(host, false);
-    else throw Error(explainHttp(res.status, body, prov.name));
-    if (!res.ok) throw Error(explainHttp(res.status, await res.text(), prov.name));
-  }
-  const text = await readCompletion(res, () => n => progress('пишет', n), prov.name);
-  if (!text.trim()) throw Error('Модель вернула пустой ответ. Попробуйте ещё раз.');
-  return parseReply(text);
-}
-
+/* The page's port: the first answer comes as {result, by, rival?}. With a second provider
+ * (rival = its name) the port stays open and its answer follows as {twin: {by, ms, result, same} | {by, ms, error}}.
+ * {error} when nothing answered. */
 chrome.runtime.onConnect.addListener(port => {
   if (port.name !== 'solve') return;
   const sender = port.sender;
@@ -124,33 +78,53 @@ chrome.runtime.onConnect.addListener(port => {
   const abort = new AbortController();
   let open = true;
   active++;
-  let released = false;
+  let released = false, waiting302 = false;
   const started = Date.now();
   const stalled = () => Date.now() - started > 60000; // not just a switch to the next question
-  const release = () => { if (!released) { released = true; active--; } };
+  const done = () => { clearInterval(keepAlive); clearTimeout(timeout); if (!released) { released = true; active--; } };
   const post = msg => { if (open) port.postMessage(msg); };
   // An awaited fetch is not an extension event; touching an API keeps the worker alive.
   const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
   const timeout = setTimeout(() => abort.abort(), 150000);
-  port.onDisconnect.addListener(() => { open = false; if (!released && stalled()) providerId().then(id => id === '302' && forgetRoute()); abort.abort(); clearInterval(keepAlive); clearTimeout(timeout); release(); });
-  port.onMessage.addListener(msg => {
+  port.onDisconnect.addListener(() => { open = false; if (waiting302 && stalled()) forgetRoute(); abort.abort(); done(); });
+
+  const failure = (err, id) => {
+    const offline = /failed to fetch|network/i.test(err.message);
+    if (id === '302' && (abort.signal.aborted ? stalled() : offline)) forgetRoute();
+    return abort.signal.aborted ? 'Нет ответа за 2,5 минуты. Повторите.'
+      : !offline ? err.message
+      : id === '302' ? 'Нет связи с 302.ai (оба адреса). Проверьте интернет.' : `Нет связи с ${provider(id).name}. Проверьте интернет.`;
+  };
+
+  port.onMessage.addListener(async msg => {
     if (!msg.solve) return;
-    solve(msg.solve, abort.signal, (stage, chars) => post({stage, chars}))
-      .then(result => post({result}))
-      .catch(async err => {
-        const id = await providerId(), offline = /failed to fetch|network/i.test(err.message);
-        if (id === '302' && (abort.signal.aborted ? stalled() : offline)) forgetRoute();
-        post({error: abort.signal.aborted ? 'Нет ответа за 2,5 минуты. Повторите.'
-          : !offline ? err.message
-          : id === '302' ? 'Нет связи с 302.ai (оба адреса). Проверьте интернет.' : `Нет связи с ${provider(id).name}. Проверьте интернет.`});
-      })
-      .finally(() => { clearInterval(keepAlive); clearTimeout(timeout); release(); });
+    try {
+      const task = msg.solve, c = await creds();
+      if (!c) return post({error: 'Расширение заблокировано. Нажмите на значок TestPad Pocket и введите пароль.'});
+      const image = task.useFormula === false ? null : await formula();
+      const runs = c.race ? [{...c, main: true}, c.race] : [{...c, main: true}];
+      const name = id => provider(id).name;
+      waiting302 = uses302(c);
+      await race(runs.map(r => ({id: r.provider, run: () =>
+        solveOn(r, task, image, abort.signal, r.main)
+          .catch(err => { throw Error(failure(err, r.provider)); })
+          .finally(() => { if (r.provider === '302') waiting302 = false; }),
+      })), e => {
+        if (e.first) post({result: e.first.reply, by: name(e.first.id), ms: e.first.ms,
+          rival: runs.length > 1 ? name(runs.find(r => r.provider !== e.first.id).provider) : undefined});
+        if (e.other) post({twin: {by: name(e.other.id), ms: e.other.ms,
+          ...(e.other.error ? {error: e.other.error.message} : {result: e.other.reply, same: e.other.same})}});
+        if (e.failed) post({error: e.failed.length === 1 ? e.failed[0].error.message
+          : e.failed.map(f => `${name(f.id)}: ${f.error.message}`).join('\n')});
+      }, (a, b) => sameAnswer(task.fields, a, b));
+    } catch (err) { post({error: err.message}); }
+    finally { done(); }
   });
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.warm && sender.tab && sender.frameId === 0 && OTP_URL.test(sender.url || '')) {
-    providerId().then(id => id === '302' && route()).catch(() => {});
+    creds().then(c => uses302(c) && route()).catch(() => {});
     return;
   }
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return; // extension pages only
@@ -159,25 +133,31 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       const vault = await fetch(chrome.runtime.getURL('extension/vault.json')).then(r => r.ok ? r.json() : null).catch(() => null);
       if (!vault) return {error: 'В папке расширения нет extension/vault.json. Запустите node tools/seal.mjs и обновите расширение.'};
       try {
-        const {key, provider: id} = await openAny(vault, msg.unlock.password);
+        const {key, provider: id, race} = await openAny(vault, msg.unlock.password);
         // A model name typed for one provider means nothing on the other.
         if (id !== await providerId()) await chrome.storage.local.remove('model');
-        await chrome.storage.local.remove(['apiKey', 'provider']);
-        await chrome.storage.session.remove(['apiKey', 'provider']);
-        await (msg.unlock.remember ? chrome.storage.local : chrome.storage.session).set({apiKey: key, provider: id});
+        await chrome.storage.local.remove(KEYS);
+        await chrome.storage.session.remove(KEYS);
+        await (msg.unlock.remember ? chrome.storage.local : chrome.storage.session)
+          .set({apiKey: key, provider: id, ...(race && {raceKey: race.key, raceProvider: race.provider})});
         return {ok: true};
       } catch (err) { return {error: err.message === 'wrong-password' ? 'Неверный пароль.' : 'Хранилище повреждено.'}; }
     })().then(reply);
     return true;
   }
   if (msg.route) {
-    providerId().then(async id => id === '302' ? {...await route(msg.route.fresh), hosts: API_HOSTS}
-      : {host: provider(id).hosts[0], ms: null, hosts: provider(id).hosts}).then(reply);
+    (async () => {
+      const c = await creds(), id = c?.provider || '302';
+      const main = id === '302' ? {...await route(msg.route.fresh), hosts: API_HOSTS} : {host: provider(id).hosts[0], ms: null, hosts: provider(id).hosts};
+      if (!c?.race) return main;
+      const other = c.race.provider === '302' ? (await route(msg.route.fresh)).host : provider(c.race.provider).hosts[0];
+      return {...main, also: other};
+    })().then(reply);
     return true;
   }
   if (msg.checkUpdate) { checkUpdate().then(reply); return true; }
   if (msg.lock) {
-    Promise.all([chrome.storage.local.remove(['apiKey', 'provider']), chrome.storage.session.remove(['apiKey', 'provider'])]).then(() => reply({ok: true}));
+    Promise.all([chrome.storage.local.remove(KEYS), chrome.storage.session.remove(KEYS)]).then(() => reply({ok: true}));
     return true;
   }
 });

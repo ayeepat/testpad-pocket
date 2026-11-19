@@ -3,10 +3,13 @@
   let reveal = false;           // eye: answer opens only when clicked; every new answer starts folded
   let shownKey = '';            // question signature the output belongs to
   let job = null;               // {key, port, timer}
-  const results = new Map();    // signature -> {answer, work, note, error}
+  let view = 0;                 // with two providers: 0 = the first answer, 1 = the other one
+  // signature -> {answer, work, note, error, by, ms, twin}
+  // twin (two providers): {by, pending} until the slower one settles, then {by, ms, answer, work, error, same, lit}
+  const results = new Map();
   const life = new AbortController();
 
-  const EYE = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 
   const host = document.createElement('div');
   const shadow = host.attachShadow({mode: 'closed'});
@@ -20,19 +23,53 @@ header{display:flex;align-items:center;gap:6px;padding:5px 7px 4px 9px;position:
 .card.br{flex-direction:column-reverse}.card.br header{justify-content:flex-end}.card.br output{padding:8px 10px 0}
 button{all:unset;cursor:pointer;color:#9a9a9a;font-size:10px;line-height:14px;padding:0 3px;border-radius:3px;position:relative}
 button:hover{color:#555;background:#f2f2f2}
-button.eye{display:flex;align-items:center;height:14px}
+button.eye{display:flex;align-items:center;height:18px;padding:0 4px}
 button.go{font-size:11px;font-weight:600;padding:0 5px}
 button:disabled{cursor:default;opacity:.3;background:none!important;color:#9a9a9a!important}
-button.eye.dot::after{content:"";position:absolute;top:-1px;right:0;width:4px;height:4px;border-radius:50%;background:#5fae7a}
+button.eye.dot::after{content:"";position:absolute;top:0;right:1px;width:5px;height:5px;border-radius:50%;background:#5fae7a}
 button.eye.err::after{background:#d07a7a}
 output{display:block;overflow:auto;max-height:var(--h,34vh);padding:0 10px 8px}
 output:empty,output[hidden]{display:none}
 .a{font-weight:600;white-space:pre-wrap}.w{white-space:pre-wrap;color:#444;margin-top:3px;font-size:12px}.n{color:#8a6a2a;margin-top:3px;font-size:11px}.e{color:#a33;white-space:pre-wrap;font-size:12px}
+.sw{display:flex;gap:2px;margin:0 0 3px -3px;font-size:10px}
+.sw button{font-size:10px;color:#b0b0b0}
+.sw button.on{color:#555}
+.sw button.wait{cursor:default;opacity:.45;background:none!important}
+.sw i{font-style:normal;margin-left:3px;font-weight:600}
+.sw .ok{color:#5fae7a}.sw .no{color:#d07a7a}.sw .na{color:#c9a25a}
+.sw button.lit{animation:lit 1.6s ease-out}
+@keyframes lit{0%,30%{background:#e7f2ea;color:#333}100%{background:none}}
 </style><div class="card"><header><span class="lbl">Реклама</span><button class="eye" type="button" title=""></button><button class="go" type="button">?</button></header><output></output></div>`;
   const $ = s => shadow.querySelector(s);
   const card = $('.card'), eye = $('.eye'), go = $('.go'), output = $('output');
 
   function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; }
+
+  const secs = ms => ms == null ? '' : (ms / 1000).toFixed(1).replace('.', ',') + ' с';
+
+  // Two providers: a tiny switch over the answer. The first one to answer is on the left and shown
+  // by default; the other stays faded until it answers, then lights up with ✓ (same answer),
+  // ✗ (a different one) or ! (it failed).
+  function tabs(r) {
+    const t = r.twin, row = document.createElement('div');
+    row.className = 'sw';
+    const tab = (i, text, title) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.dataset.v = i; b.textContent = text; b.title = title;
+      b.className = 't' + i + (view === i ? ' on' : '');
+      return row.appendChild(b);
+    };
+    tab(0, r.by, `Ответил первым · ${secs(r.ms)}`);
+    const b = tab(1, t.by, t.pending ? 'Ещё думает…' : `${t.error ? 'Ошибка' : 'Ответил'} · ${secs(t.ms)}`);
+    if (t.pending) { b.classList.add('wait'); b.append('…'); return row; }
+    const [cls, mark, why] = t.error ? ['na', '!', 'ошибка'] : t.same === true ? ['ok', '✓', 'ответы совпали']
+      : t.same === false ? ['no', '✗', 'ответы разные'] : ['na', '?', 'не сравнить'];
+    const i = document.createElement('i');
+    i.className = cls; i.textContent = mark; b.append(i);
+    b.title += ' · ' + why;
+    if (t.lit) { b.classList.add('lit'); t.lit = false; } // lights up once, the first time it is seen
+    return row;
+  }
 
   function render() {
     go.disabled = !!job && job.key === shownKey;   // "?" fades and can't be pressed while sent
@@ -43,10 +80,13 @@ output:empty,output[hidden]{display:none}
     output.hidden = !reveal;
     output.replaceChildren();
     if (!r || !reveal) return;
-    if (r.error) return output.append(line('e', r.error));
-    if (r.answer) output.append(line('a', 'Ответ: ' + r.answer));
-    if (r.work) output.append(line('w', r.work));
-    if (r.note) output.append(line('n', r.note));
+    if (r.twin) output.append(tabs(r));
+    const s = r.twin && view === 1 ? r.twin : r;
+    if (s.error) return output.append(line('e', s.error));
+    if (s.answer) output.append(line('a', 'Ответ: ' + s.answer));
+    if (s.work) output.append(line('w', s.work));
+    if (s === r && r.note) output.append(line('n', r.note));
+    if (s !== r) output.append(line('n', 'Не вписан — для сверки.'));
   }
 
   const AD_SPOTS = ['.otp-ad-content', '.adleft', '.adright', '[id^="yandex_rtb_"]', '[id^="adfox_"]'];
@@ -66,7 +106,7 @@ output:empty,output[hidden]{display:none}
     if (root !== lastRoot || dirty) {
       lastRoot = root; dirty = false;
       const key = otp.read(root).key;
-      if (key !== shownKey) { shownKey = key; reveal = false; render(); }
+      if (key !== shownKey) { shownKey = key; reveal = false; view = 0; render(); }
     }
     if (!host.isConnected) document.documentElement.append(host);
     const r = adRect(), s = host.style;
@@ -87,9 +127,17 @@ output:empty,output[hidden]{display:none}
 
   function finish(key, value) {
     results.set(key, value);
-    if (key === shownKey) reveal = false;   // never pop open by itself
+    if (key === shownKey) { reveal = false; view = 0; }   // never pop open by itself
     if (job?.key === key) { clearTimeout(job.timer); job = null; }
     render();
+  }
+
+  // The slower provider's answer: attach it to the first one, unless that was replaced meanwhile.
+  // The view is left as it is, open or folded; only the switch lights up.
+  function twin(key, entry, value) {
+    if (results.get(key) !== entry || !entry.twin?.pending) return;
+    entry.twin = {...value, by: entry.twin.by, lit: true};
+    if (key === shownKey) render();
   }
 
   async function solve() {
@@ -103,13 +151,13 @@ output:empty,output[hidden]{display:none}
     render();
     const {images, skipped} = await otp.pictures(snap.visual);
     if (job !== me) return;
-    let port;
+    let port, entry = null;
     try { port = me.port = chrome.runtime.connect({name: 'solve'}); }
     catch { return finish(snap.key, {error: 'Расширение обновилось — обновите страницу (F5).'}); }
     port.onMessage.addListener(msg => {
+      if (msg.twin) { port.disconnect(); const {result, ...t} = msg.twin; return twin(snap.key, entry, {...t, ...result}); }
       if (job !== me) return;
-      if (msg.stage) return;
-      port.disconnect();
+      if (!msg.rival) port.disconnect();   // with two providers, stay open for the slower one
       if (msg.error) return finish(snap.key, {error: msg.error});
       const r = msg.result;
       const notes = [];
@@ -119,10 +167,13 @@ output:empty,output[hidden]{display:none}
         if (total && filled < total) notes.push(filled ? `Заполнено ${filled} из ${total} — остальное вручную.` : 'Внесите ответ вручную.');
       } else notes.push('Задание сменилось — ответ не вносился.');
       if (skipped) notes.push(`Не удалось прочитать рисунков: ${skipped}.`);
-      finish(snap.key, {answer: r.answer, work: r.work, note: notes.join(' ')});
+      entry = {answer: r.answer, work: r.work, note: notes.join(' '), by: msg.by, ms: msg.ms,
+        twin: msg.rival ? {by: msg.rival, pending: true} : null};
+      finish(snap.key, entry);
     });
     port.onDisconnect.addListener(() => {
       if (job === me) finish(snap.key, {error: 'Соединение прервано. Нажмите ещё раз.'});
+      else if (entry) twin(snap.key, entry, {error: 'Не дождались ответа.'});
     });
     port.postMessage({solve: {question: snap.question, fields: snap.fields, images}});
   }
@@ -155,7 +206,12 @@ output:empty,output[hidden]{display:none}
     if (e.code === 'Digit9') { e.preventDefault(); e.stopPropagation(); once('solve', solve); }
   }, {capture: true, signal: life.signal});
   go.addEventListener('click', e => { if (e.isTrusted) solve(); });
-  eye.addEventListener('click', e => { if (e.isTrusted) { reveal = !reveal; render(); } });
+  eye.addEventListener('click', e => { if (e.isTrusted) { reveal = !reveal; view = 0; render(); } }); // opens on the first answer
+  output.addEventListener('click', e => {
+    const b = e.isTrusted && e.target.closest?.('.sw button');
+    if (!b || b.classList.contains('wait') || view === +b.dataset.v) return;
+    view = +b.dataset.v; render();
+  });
 
   let scheduled = false;
   const schedule = () => { if (!scheduled) { scheduled = true; requestAnimationFrame(() => { scheduled = false; place(); }); } };

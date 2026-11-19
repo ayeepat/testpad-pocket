@@ -8,9 +8,11 @@ ROOT = Path(__file__).resolve().parent.parent
 PASSWORD = 'e2e-password-long'
 POLZA_PASSWORD = 'e2e-polza-password'
 NAMED_PASSWORD = 'e2e-named-password'
+RACE_PASSWORD = 'e2e-race-password'
 tmp = Path(tempfile.mkdtemp(prefix='tpp-e2e-'))
 ext = tmp / 'ext'
 shutil.copytree(ROOT, ext, ignore=shutil.ignore_patterns('.git', 'tests', 'node_modules'))
+(ext / 'extension/vault.json').unlink(missing_ok=True)  # start from an empty vault, not the real one
 subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--no-check', '--out', str(ext / 'extension/vault.json')],
                env={'PATH': '/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin', 'API_302_KEY': 'sk-e2e', 'VAULT_PASSWORD': PASSWORD},
                check=True, capture_output=True)
@@ -27,8 +29,41 @@ subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--provider', 'polza', '--
 listed = subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--list', '--out', str(ext / 'extension/vault.json')],
                         capture_output=True, text=True, check=True).stdout
 assert '(без имени) — Polza.ai' in listed and 'E2E — Polza.ai' in listed and 'хранилище: 3' in listed, listed
+# An account with two keys: 302.ai, and Polza.ai added with --race. Every solve goes to both.
+subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--name', 'Race', '--no-check', '--out', str(ext / 'extension/vault.json')],
+               env={**seal_env, 'API_KEY': 'sk-race', 'VAULT_PASSWORD': RACE_PASSWORD}, check=True, capture_output=True)
+subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--race', 'polza', '--no-check', '--out', str(ext / 'extension/vault.json')],
+               env={**seal_env, 'RACE_KEY': 'pz-race', 'VAULT_PASSWORD': RACE_PASSWORD}, check=True, capture_output=True)
+listed = subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--list', '--out', str(ext / 'extension/vault.json')],
+                        capture_output=True, text=True, check=True).stdout
+assert 'Race — 302.ai + Polza.ai (гонка)' in listed and '(без имени) — 302.ai\n' in listed, listed
+# Secrets typed into the seal tool never reach the screen: not when pasted, and not when the line is
+# edited (Backspace used to redraw prompt + line, key included).
+import os, pty, select
+def typed_secrets_shown(answers):
+    out = tmp / 'pty-vault.json'
+    pid, fd = pty.fork()
+    if pid == 0: os.execvp('node', ['node', str(ROOT / 'tools/seal.mjs'), '--no-check', '--out', str(out)])
+    seen = b''
+    def drain(t):
+        nonlocal seen
+        end = time.time() + t
+        while time.time() < end:
+            if select.select([fd], [], [], 0.05)[0]:
+                try: seen += os.read(fd, 4096)
+                except OSError: return
+    for a in answers:
+        drain(0.8); os.write(fd, (a + 'x').encode()); time.sleep(0.1); os.write(fd, b'\x7f\r')  # paste, typo, Backspace
+    drain(4); os.waitpid(pid, 0)
+    assert out.exists(), seen
+    return [a for a in answers if a.encode() in seen]
+assert typed_secrets_shown(['sk-pasted-secret-1', 'pasted password 12', 'pasted password 12']) == [], 'seal tool echoes secrets'
+print('seal prompt hides typed and pasted secrets: ok')
 html = (ROOT / 'tests/fixtures/onlinetestpad.html').read_text()
 requests, mode = [], {'v': 'ok', 'api.302ai.cn': 'ok', 'api.302.ai': 'ok', 'api.polza.ai': 'ok'}
+# Race tests: a host listed in lag answers after that many seconds, with its own values. Handlers run on
+# this thread, so a sleep would hold the other host too: replies wait in `held` and pump() sends them.
+lag, reply_values, held = {}, {}, []
 GATEWAY_401 = '{"error":{"err_code":-10001,"message":"Missing 302 Apikey"}}'
 LANDING = '<html>' + 'x' * 24000 + '</html>'
 
@@ -51,11 +86,20 @@ def api(route):
         return route.fulfill(status=401, body='{"error":{"message":"invalid key"}}', content_type='application/json')
     if mode['v'] == 'param' and 'reasoning_effort' in body:
         return route.fulfill(status=400, body='{"error":{"err_code":-10003,"message":"Parameter error"}}', content_type='application/json')
-    answer = json.dumps({'work': 'ИТ — методы и средства обработки информации.', 'answer': 'совокупность методов…', 'values': ['2']}, ensure_ascii=False)
+    who = 'polza' if host == 'api.polza.ai' else '302'
+    answer = json.dumps({'work': f'ИТ — методы и средства обработки информации ({who}).', 'answer': 'совокупность методов…',
+                         'values': reply_values.get(host, ['2'])}, ensure_ascii=False)
     chunks = [answer[i:i + 20] for i in range(0, len(answer), 20)]
     sse = ''.join('data: ' + json.dumps({'choices': [{'delta': {'content': c}}]}) + '\n\n' for c in chunks) + 'data: [DONE]\n\n'
+    if host in lag: return held.append((time.time() + lag[host], route, sse))
     time.sleep(1.2)
     route.fulfill(status=200, body=sse, headers={'content-type': 'text/event-stream'})
+
+def pump():
+    for item in [h for h in held if h[0] <= time.time()]:
+        held.remove(item)
+        try: item[1].fulfill(status=200, body=item[2], headers={'content-type': 'text/event-stream'})
+        except Exception: pass  # the request was cancelled meanwhile
 
 def launch(p, profile):
     ctx = p.chromium.launch_persistent_context(str(profile), channel='chromium', headless=True,
@@ -124,6 +168,7 @@ def open_answer(page):
 def wait(cond, what, timeout=8):
     end = time.time() + timeout
     while time.time() < end:
+        pump()
         if cond(): return
         time.sleep(0.1)
     raise AssertionError('timed out: ' + what)
@@ -307,6 +352,94 @@ with sync_playwright() as p:
     popup.click('#lock')  # «Дополнительно» is still open from the sign-out above
     wait(lambda: popup.is_visible('#unlock'), 'locked again')
     print('second password -> Polza.ai: ok')
+
+    # Two providers on one account: both get every question, the first answer is filled in and shown,
+    # the other lights up in a small switch with ✓ (same fill values) or ✗ (different).
+    popup.fill('#pass', RACE_PASSWORD); popup.click('#go')
+    wait(lambda: popup.is_visible('#ready'), 'unlocked the two-key account')
+    wait(lambda: popup.text_content('#route').endswith('+ api.polza.ai'), 'popup shows both servers', timeout=15)
+    assert popup.is_visible('#race-row') and popup.is_checked('#race'), 'race switch shown and on'
+    assert popup.text_content('#race-label') == 'Сразу два: 302.ai и Polza.ai', popup.text_content('#race-label')
+    print('popup server line:', popup.text_content('#route'))
+    radio = lambda n: page.is_checked(['#t_ans_6406832', '#t_ans_6406831', '#t_ans_6406830'][n - 1])
+    cls = lambda c: node(page, c)[0].split()
+    def race_solve(text, lags, values):
+        lag.clear(); lag.update(lags); reply_values.clear(); reply_values.update(values)
+        page.evaluate("document.querySelectorAll('input[type=radio]').forEach(r => r.checked = false)")
+        page.evaluate(f"document.querySelector('.qtext').textContent = {json.dumps(text)}")
+        time.sleep(0.3); n = len(requests)
+        page.keyboard.press('Control+Shift+9')
+        wait(lambda: done(page), 'first answer', timeout=15)
+        return n
+
+    # Polza.ai answers first; 302.ai agrees later (other words, same fill values) -> ✓.
+    n = race_solve('Гонка 1', {'api.302ai.cn': 3, 'api.302.ai': 3, 'api.polza.ai': 0.3}, {})
+    assert radio(2), 'first answer filled in'
+    text = open_answer(page)
+    assert 'Polza.ai' in text and '302.ai' in text and '(polza)' in text and '(302)' not in text, text
+    assert 'wait' in cls('t1') and 'on' in cls('t0'), 'second tab faded while it thinks'
+    wait(lambda: '✓' in panel(page), 'second answer lights up with a tick', timeout=10)
+    assert 'Ответ' in panel(page), 'the open answer stays open when the second one arrives'
+    assert 'lit' in cls('t1') and 'wait' not in cls('t1')
+    if len(sys.argv) > 1: page.screenshot(path=sys.argv[1] + '/race-match.png')
+    hits = requests[n:]
+    assert sorted(r['host'] for r in hits) in (['api.302ai.cn', 'api.polza.ai'], ['api.302.ai', 'api.polza.ai']), hits
+    pz = next(r for r in hits if r['host'] == 'api.polza.ai'); m3 = next(r for r in hits if r['host'] != 'api.polza.ai')
+    assert pz['auth'] == 'Bearer pz-race' and pz['body']['model'] == 'google/gemini-3.8-flash', pz
+    assert m3['auth'] == 'Bearer sk-race' and m3['body']['model'] == 'gemini-3.8-flash', m3
+    assert pz['body']['messages'] == m3['body']['messages'], 'both get the same question'
+    click_in_panel(page, 't1'); time.sleep(0.15)
+    text = panel(page)
+    assert '(302)' in text and '(polza)' not in text and 'для сверки' in text and 'on' in cls('t1'), text
+    click_in_panel(page, 'eye'); click_in_panel(page, 'eye'); time.sleep(0.15)
+    assert '(polza)' in panel(page), 'opening the eye again starts on the first answer'
+    click_in_panel(page, 'eye')
+    print('race, Polza.ai first, answers agree: ok')
+
+    # 302.ai first; Polza.ai picks another option -> ✗. Arrives while folded: lights up when opened.
+    race_solve('Гонка 2', {'api.302ai.cn': 0.3, 'api.302.ai': 0.3, 'api.polza.ai': 2}, {'api.polza.ai': ['3']})
+    assert radio(2) and not radio(3), 'the first answer is the one filled in'
+    wait(lambda: not held, 'second reply sent', timeout=10)
+    time.sleep(0.5)
+    assert 'Ответ' not in panel(page), 'still folded'
+    text = open_answer(page)
+    assert '302.ai' in text and '✗' in text and '(302)' in text, text
+    assert 'lit' in cls('t1'), 'lights up the first time it is seen'
+    if len(sys.argv) > 1: page.screenshot(path=sys.argv[1] + '/race-differ.png')
+    assert radio(2) and not radio(3), 'the second answer is not filled in'
+    click_in_panel(page, 'eye')
+    print('race, 302.ai first, answers differ: ok')
+
+    # Polza.ai rejects its key: 302.ai's answer still comes, the switch shows "!" and the error.
+    mode['api.polza.ai'] = 'nokey'
+    race_solve('Гонка 3', {}, {})
+    assert radio(2)
+    text = open_answer(page)
+    wait(lambda: '!' in panel(page), 'failed second provider marked', timeout=10)
+    click_in_panel(page, 't1'); time.sleep(0.15)
+    assert 'Ключ Polza.ai не принят' in panel(page), panel(page)
+    click_in_panel(page, 'eye')
+    # Both fail: one error naming each provider.
+    mode['v'] = 'unauthorized'
+    race_solve('Гонка 4', {}, {})
+    wait(lambda: 'err' in cls('eye'), 'red dot')
+    text = open_answer(page)
+    assert '302.ai: Ключ 302.ai не принят' in text and 'Polza.ai: Ключ Polza.ai не принят' in text, text
+    click_in_panel(page, 'eye')
+    mode['v'] = 'ok'; mode['api.polza.ai'] = 'ok'
+    print('race errors: ok')
+
+    # Turned off in the popup: one provider again, no switch.
+    if not popup.is_visible('#race'): popup.click('summary')  # «Дополнительно» may still be open
+    popup.uncheck('#race')
+    wait(lambda: not popup.text_content('#route').endswith('api.polza.ai'), 'popup drops the second server', timeout=15)
+    n = race_solve('Гонка выкл', {}, {})
+    assert 'Ответ' in open_answer(page) and 'Polza.ai' not in panel(page)
+    assert [r['host'] for r in requests[n:]] in (['api.302ai.cn'], ['api.302.ai']), requests[n:]
+    popup.check('#race'); popup.click('#lock')
+    wait(lambda: popup.is_visible('#unlock'), 'locked again')
+    lag.clear(); reply_values.clear()
+    print('race switch in the popup: ok')
 
     # Updates: the popup reports a newer GitHub version, and new files on disk make the extension reload itself.
     # (Here the extension is loaded from the command line, which Chromium disables on reload; a "Load unpacked"

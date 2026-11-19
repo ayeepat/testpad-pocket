@@ -10,10 +10,18 @@ function pretty(shortcut) {
 }
 
 async function refresh() {
-  const [{apiKey: saved, provider: savedProv, model, effort}, {apiKey: temp, provider: tempProv}] = await Promise.all([
-    chrome.storage.local.get(['apiKey', 'provider', 'model', 'effort']), chrome.storage.session.get(['apiKey', 'provider'])]);
-  const unlocked = !!(saved || temp);
-  const prov = provider(temp ? tempProv : savedProv);
+  const KEYS = ['apiKey', 'provider', 'raceProvider'];
+  const [local, temp] = await Promise.all([
+    chrome.storage.local.get([...KEYS, 'model', 'effort', 'raceOff']), chrome.storage.session.get(KEYS)]);
+  const {apiKey: saved, model, effort} = local, keys = temp.apiKey ? temp : local;
+  const unlocked = !!(saved || temp.apiKey);
+  const prov = provider(keys.provider);
+  // An account with a second key: both providers answer every question, unless turned off here.
+  $('race-row').hidden = $('race-help').hidden = !keys.raceProvider;
+  if (keys.raceProvider) {
+    $('race-label').textContent = `Сразу два: ${prov.name} и ${provider(keys.raceProvider).name}`;
+    $('race').checked = !local.raceOff;
+  }
   $('model-label').textContent = 'Модель ' + prov.name;
   $('model').placeholder = prov.model;
   $('title').className = unlocked ? 'on' : '';
@@ -53,13 +61,19 @@ $('model').addEventListener('change', () => {
   value ? chrome.storage.local.set({model: value}) : chrome.storage.local.remove('model');
   msg('Сохранено.', true);
 });
+$('race').addEventListener('change', () => {
+  $('race').checked ? chrome.storage.local.remove('raceOff') : chrome.storage.local.set({raceOff: true});
+  msg('Сохранено.', true);
+  showRoute();
+});
 $('effort').addEventListener('change', () => { chrome.storage.local.set({effort: $('effort').value}); msg('Сохранено.', true); });
 
 async function showRoute(fresh = false) {
   $('route').textContent = fresh ? 'проверяю…' : '…';
   const r = await chrome.runtime.sendMessage({route: {fresh}}).catch(() => null);
   $('route').textContent = !r ? '—' : !r.host ? 'нет связи ни с одним' :
-    new URL(r.host).host + (r.ms != null ? ` · ${(r.ms / 1000).toFixed(1).replace('.', ',')} с` : '');
+    new URL(r.host).host + (r.ms != null ? ` · ${(r.ms / 1000).toFixed(1).replace('.', ',')} с` : '') +
+    (r.also ? ' + ' + new URL(r.also).host : '');
 }
 $('reroute').addEventListener('click', e => { e.preventDefault(); showRoute(true); });
 

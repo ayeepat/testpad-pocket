@@ -46,6 +46,8 @@
       <option value="high">Высокая — точнее</option>
       <option value="medium">Средняя — быстрее</option>
     </select>
+    <label class="row" id="race-row" hidden><input id="race" type="checkbox"> <span id="race-label">Сразу два провайдера</span></label>
+    <small id="race-help" hidden>Первый ответ вписывается, второй — для сверки (✓ или ✗ над ответом).</small>
     <label for="model" id="model-label">Модель</label>
     <input id="model" type="text" spellcheck="false" placeholder="gemini-3.8-flash">
     <div class="row" id="route-row"><span>Сервер: <span id="route">…</span></span><a href="#" id="reroute">проверить</a></div>
