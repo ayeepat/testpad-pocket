@@ -1,27 +1,24 @@
-import {API_HOSTS, provider, fastestHost, openAny, ask, race, sameAnswer} from './lib.js';
+import {API_HOSTS, provider, fastestHost, openAny, ask, race, sameAnswer, modelFor} from './lib.js';
 
 let active = 0; // solves in flight; never self-reload during one
 const OTP_URL = /^https:\/\/(?:[\w-]+\.)*onlinetestpad\.com\//i;
-const KEYS = ['apiKey', 'provider', 'raceKey', 'raceProvider'];
+const KEYS = ['apiKey', 'provider', 'raceKey', 'raceProvider', 'prefs'];
 
 /** The unlocked key and its provider id ('302' or 'polza'), or null.
- *  race: {key, provider} when the account has a second key and this computer hasn't turned it off. */
+ *  race: {key, provider} when the account has a second key and this computer hasn't turned it off.
+ *  prefs: the account's own model and depth per provider, if it has them. */
 async function creds() {
   const temp = await chrome.storage.session.get(KEYS);
   const s = temp.apiKey ? temp : await chrome.storage.local.get(KEYS);
   if (!s.apiKey) return null;
   const {raceOff} = await chrome.storage.local.get('raceOff');
-  const c = {key: s.apiKey, provider: s.provider || '302'};
+  const c = {key: s.apiKey, provider: s.provider || '302', prefs: s.prefs};
   if (s.raceKey && !raceOff) c.race = {key: s.raceKey, provider: s.raceProvider};
   return c;
 }
 const providerId = async () => (await creds())?.provider || '302';
 const uses302 = c => c?.provider === '302' || c?.race?.provider === '302';
 
-async function settings(id) {
-  const s = await chrome.storage.local.get(['model', 'effort']);
-  return {model: (s.model || '').trim() || provider(id).model, effort: s.effort ?? 'high'};
-}
 
 /* ---------- which 302.ai address ----------
  * Probed when a test page opens and kept 10 minutes, so a solve rarely waits for it.
@@ -58,12 +55,11 @@ async function formula() {
 
 /** One provider's solve. 302.ai goes to its fastest working address first, and remembers
  *  a dead or key-less address it had to skip until the route expires. */
-async function solveOn({key, provider: id}, task, image, signal, main) {
-  const {model, effort} = await settings(id);
+async function solveOn({key, provider: id}, task, image, signal, main, prefs) {
+  const {model, effort} = modelFor(id, {prefs, main, local: await chrome.storage.local.get(['model', 'effort'])});
   const is302 = id === '302';
   const hosts = is302 ? await hostOrder() : provider(id).hosts;
-  // A model name typed in the popup is for the main provider; the second one keeps its default.
-  const {reply, host, skipped} = await ask({key, id, hosts, model: main ? model : provider(id).model, effort, task, formula: image, signal});
+  const {reply, host, skipped} = await ask({key, id, hosts, model, effort, task, formula: image, signal});
   if (is302 && skipped) chrome.storage.session.set({route: {host, ms: null, at: Date.now()}});
   return reply;
 }
@@ -106,7 +102,7 @@ chrome.runtime.onConnect.addListener(port => {
       const name = id => provider(id).name;
       waiting302 = uses302(c);
       await race(runs.map(r => ({id: r.provider, run: () =>
-        solveOn(r, task, image, abort.signal, r.main)
+        solveOn(r, task, image, abort.signal, r.main, c.prefs)
           .catch(err => { throw Error(failure(err, r.provider)); })
           .finally(() => { if (r.provider === '302') waiting302 = false; }),
       })), e => {
@@ -133,13 +129,15 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       const vault = await fetch(chrome.runtime.getURL('extension/vault.json')).then(r => r.ok ? r.json() : null).catch(() => null);
       if (!vault) return {error: 'В папке расширения нет extension/vault.json. Запустите node tools/seal.mjs и обновите расширение.'};
       try {
-        const {key, provider: id, race} = await openAny(vault, msg.unlock.password);
-        // A model name typed for one provider means nothing on the other.
+        const {key, provider: id, race, prefs} = await openAny(vault, msg.unlock.password);
+        // A model name typed for one provider means nothing on the other; an account with its own
+        // settings brings them along, so this computer's earlier choices give way.
         if (id !== await providerId()) await chrome.storage.local.remove('model');
+        if (prefs) await chrome.storage.local.remove(['model', 'effort']);
         await chrome.storage.local.remove(KEYS);
         await chrome.storage.session.remove(KEYS);
         await (msg.unlock.remember ? chrome.storage.local : chrome.storage.session)
-          .set({apiKey: key, provider: id, ...(race && {raceKey: race.key, raceProvider: race.provider})});
+          .set({apiKey: key, provider: id, ...(race && {raceKey: race.key, raceProvider: race.provider}), ...(prefs && {prefs})});
         return {ok: true};
       } catch (err) { return {error: err.message === 'wrong-password' ? 'Неверный пароль.' : 'Хранилище повреждено.'}; }
     })().then(reply);

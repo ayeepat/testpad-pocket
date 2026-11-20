@@ -11,6 +11,16 @@
       "provider": "polza",
       "iv": "oJTcsiW+Jl3Cpu7X",
       "data": "Ppxy7BJ5Ay6fIDpZPOQTeKjARzfSY+prWePOgDSGaJeyYhqxGn0zHyBTzTd7osnd6KXQuw=="
+    },
+    "prefs": {
+      "302": {
+        "model": "gpt-6.2-sol",
+        "effort": "medium"
+      },
+      "polza": {
+        "model": "openai/gpt-6.2-sol",
+        "effort": "medium"
+      }
     }
   },
   {

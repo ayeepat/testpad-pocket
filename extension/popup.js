@@ -1,4 +1,4 @@
-import {provider} from './lib.js';
+import {provider, modelFor} from './lib.js';
 
 const $ = id => document.getElementById(id);
 const msg = (text, ok = false) => { $('msg').textContent = text; $('msg').className = ok ? 'ok' : ''; };
@@ -10,26 +10,30 @@ function pretty(shortcut) {
 }
 
 async function refresh() {
-  const KEYS = ['apiKey', 'provider', 'raceProvider'];
+  const KEYS = ['apiKey', 'provider', 'raceProvider', 'prefs'];
   const [local, temp] = await Promise.all([
     chrome.storage.local.get([...KEYS, 'model', 'effort', 'raceOff']), chrome.storage.session.get(KEYS)]);
   const {apiKey: saved, model, effort} = local, keys = temp.apiKey ? temp : local;
   const unlocked = !!(saved || temp.apiKey);
   const prov = provider(keys.provider);
+  // The account's own model (if it has one) is what an empty field means.
+  const own = modelFor(keys.provider, {prefs: keys.prefs});
   // An account with a second key: both providers answer every question, unless turned off here.
   $('race-row').hidden = $('race-help').hidden = !keys.raceProvider;
   if (keys.raceProvider) {
+    const other = modelFor(keys.raceProvider, {prefs: keys.prefs, main: false});
     $('race-label').textContent = `Сразу два: ${prov.name} и ${provider(keys.raceProvider).name}`;
+    $('race-models').textContent = `${provider(keys.raceProvider).name}: ${other.model}`;
     $('race').checked = !local.raceOff;
   }
   $('model-label').textContent = 'Модель ' + prov.name;
-  $('model').placeholder = prov.model;
+  $('model').placeholder = own.model;
   $('title').className = unlocked ? 'on' : '';
   $('state').textContent = unlocked ? (saved ? 'Готово' : 'Готово до закрытия браузера') : 'Заблокировано';
   $('unlock').hidden = unlocked;
   $('ready').hidden = !unlocked;
-  $('model').value = model && model !== prov.model ? model : '';
-  $('effort').value = effort || 'high';
+  $('model').value = model && model !== own.model ? model : '';
+  $('effort').value = effort || own.effort;
   const commands = await chrome.commands.getAll();
   const key = name => commands.find(c => c.name === name)?.shortcut;
   $('k-solve').innerHTML = pretty(key('solve'));

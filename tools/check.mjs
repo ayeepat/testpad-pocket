@@ -10,22 +10,23 @@
 // Non-interactive: VAULT_PASSWORD=... node tools/check.mjs   (or API_302_KEY=... to skip the vault)
 import {readFileSync} from 'node:fs';
 import {ask as askSecret} from './ask.mjs';
-import {openAny, probeHost, provider, fastestHost, ask, race, sameAnswer} from '../extension/lib.js';
+import {openAny, probeHost, provider, fastestHost, ask, race, sameAnswer, modelFor} from '../extension/lib.js';
 
 
-let accounts = [{key: process.env.API_302_KEY, provider: '302'}];
+let accounts = [{key: process.env.API_302_KEY, provider: '302', ...modelFor('302')}];
 if (!accounts[0].key) {
   const vault = JSON.parse(readFileSync(new URL('../extension/vault.json', import.meta.url), 'utf8'));
   try {
     const opened = await openAny(vault, process.env.VAULT_PASSWORD || await askSecret('Пароль от хранилища: '));
-    accounts = [opened, opened.race].filter(Boolean);
+    // Each provider with the model and depth the extension would use for this account.
+    accounts = [opened, opened.race].filter(Boolean).map((a, i) => ({...a, ...modelFor(a.provider, {prefs: opened.prefs, main: i === 0})}));
   } catch { console.error('Неверный пароль.'); process.exit(1); }
 }
 
 /** One provider's addresses: reachable (302.ai: with a real-sized request), key accepted, model listed. */
-async function checkProvider({key, provider: id}) {
+async function checkProvider({key, provider: id, model, effort}) {
   const prov = provider(id);
-  console.log(`Провайдер: ${prov.name}`);
+  console.log(`Провайдер: ${prov.name} — ${model} (${effort === 'medium' ? 'средняя' : effort === 'high' ? 'высокая' : effort})`);
   let usable = 0;
   for (const host of prov.hosts) {
     let line = new URL(host).host.padEnd(14) + ' ';
@@ -41,8 +42,11 @@ async function checkProvider({key, provider: id}) {
       else {
         const list = prov.authPath === '/v1/models' ? auth : await get('/v1/models');
         const ids = list.ok ? ((await list.json()).data || []).map(m => m.id) : [];
-        line += 'ключ принят' + (ids.includes(prov.model) ? `, ${prov.model} есть` : `, ${prov.model} НЕТ в списке`);
-        usable++;
+        // Not listed: show the names that share its words (gpt + sol), in case this provider spells it differently.
+        const words = model.toLowerCase().split(/[^a-z]+/).filter(w => w.length > 1);
+        const near = ids.filter(m => words.every(w => m.toLowerCase().includes(w))).slice(0, 12);
+        if (ids.includes(model)) { line += `ключ принят, ${model} есть`; usable++; }
+        else line += `ключ принят, но ${model} НЕТ в списке. Похожие: ${near.join(', ') || '—'}`;
       }
     } catch (err) { line += `ключ не проверить (${err.name === 'TimeoutError' ? 'завис' : err.message})`; }
     console.log(line);
@@ -64,7 +68,7 @@ if (ok && process.argv.includes('--live')) {
   const signal = AbortSignal.timeout(150000);
   const show = (tag, id, ms, reply) => console.log(`  ${tag} ${provider(id).name.padEnd(9)} ${(ms / 1000).toFixed(1).padStart(5)} с  ответ: ${reply.answer || '—'}  поля: ${JSON.stringify(reply.values)}`);
   await race(accounts.map(a => ({id: a.provider, run: async () =>
-    (await ask({key: a.key, id: a.provider, hosts: hostsFor(a.provider), model: provider(a.provider).model, effort: 'medium', task, formula: null, signal})).reply,
+    (await ask({key: a.key, id: a.provider, hosts: hostsFor(a.provider), model: a.model, effort: a.effort, task, formula: null, signal})).reply,
   })), e => {
     if (e.first) show('1.', e.first.id, e.first.ms, e.first.reply);
     if (e.other?.reply) {

@@ -11,9 +11,18 @@ An account can also hold a second key on the other provider (see `--race` below)
 To see from a given computer which address works and whether the key is accepted on each (nothing is billed):
 
 ```
-node tools/check.mjs          # addresses and keys, nothing billed
+node tools/check.mjs          # addresses, keys, and whether the account's models exist, nothing billed
 node tools/check.mjs --live   # plus one tiny real question to every provider of the account at once
 ```
+
+To compare speed and price of Polza.ai models (billed, a few rubles):
+
+```
+node tools/bench.mjs                                # GPT-6.2 Sol, Gemini 4 Hydrogen, 3.8 Flash, 4 Neon
+node tools/bench.mjs openai/gpt-6.2-sol:low ...     # any models, as id:effort; --rounds 2 to repeat
+```
+
+It sends what the extension sends (prompt, formula picture, answer fields) on five test-style questions with known answers. Each question goes to every model at once. It prints the time, ✓/✗ and rubles for every answer, then a table sorted by median time, with the cost per question, per 100 questions, and the total.
 
 The keys are stored in `extension/vault.json`, each encrypted with its own password (PBKDF2-SHA256, 600 000 rounds + AES-256-GCM). Without the password the file is useless, so the repo can stay public. No server is involved.
 
@@ -34,6 +43,19 @@ node tools/seal.mjs --remove Liza                  # delete a named account
 Each run asks for the key and a new password (at least 12 characters), checks the key and model with that provider, and saves the entry in `extension/vault.json` next to the others. It refuses a password that already opens another entry. Commit and push that file, then whoever uses that password runs `update.cmd` / `update.command` and types it into the extension.
 
 Run it again any time to change a key or password. With `--name`, it replaces only the account with that name. Without `--name`, it replaces only that provider's main (unnamed) key. Every other entry stays as it is. The extension needs no change for a new account: it tries the typed password on every entry.
+
+### An account's own model
+
+An entry in `vault.json` can carry its own model and thinking depth for each provider, in a plain `prefs` field that isn't secret. They're used instead of the defaults on every computer where that password is typed. The main account has GPT‑6.2 Sol at medium on both providers:
+
+```json
+"prefs": {
+  "302":   {"model": "gpt-6.2-sol",        "effort": "medium"},
+  "polza": {"model": "openai/gpt-6.2-sol", "effort": "medium"}
+}
+```
+
+To change it, edit that field, push, update, and type the password into the extension again. Unlocking clears that computer's earlier popup choices, so the account's settings take effect. The seal tool keeps `prefs` when it re-seals the account.
 
 `--race polza` asks for an account's password, finds the account that password opens, and adds a Polza.ai key to it (`--race 302` adds a 302.ai key to a Polza.ai account). The account keeps its own key and password. The new key is checked with Polza.ai first, and it's encrypted with the same password. Changing that account's main key later with the same password keeps the second key. A new password drops it, and the tool says so. After pushing, type the password into the extension again so it picks up the second key.
 
@@ -64,7 +86,7 @@ The panel looks like one more ad tile («РЕКЛАМА» label, white card) and
 
 On an account with two providers, a small switch sits above the answer, with the provider that answered first on the left. Its answer is the one filled in, and the eye always opens on it. The other provider's name stays faded with «…» while it's still working. When it finishes, it lights up once and gets a mark: ✓ means the same answer (the filled-in values agree: same options, same number), ✗ means a different one, and ! means that provider failed. Click its name to read its answer or error. It's only shown for comparison and is never filled in. Hover a name to see how long it took. Autofill handles radio buttons, checkboxes, text and number fields, and dropdowns. When a field can't be filled, the panel says so. Always check the answer before moving on, because the model can be wrong.
 
-**Дополнительно** in the popup has two settings. Thinking depth: high (the default, more accurate) or medium (faster). The model name can be changed there if the provider renames the model. The field shows which provider this computer is using, and the **Сервер** line shows its address. On an account with two providers, the model field is for the main one, the **Сервер** line shows both addresses, and a «Сразу два» checkbox turns the second provider off on this computer (one request per question, half the cost).
+**Дополнительно** in the popup has two settings. Thinking depth: high (the default, more accurate) or medium (faster). The model name can be changed there if the provider renames the model. The field shows which provider this computer is using, and the **Сервер** line shows its address. The depth applies to both providers, and the model field to the main one. An empty field means the account's own model, shown greyed out. On an account with two providers, the second provider's model is listed under the checkbox, the **Сервер** line shows both addresses, and a «Сразу два» checkbox turns the second provider off on this computer (one request per question, half the cost).
 
 ## Tests
 

@@ -104,7 +104,7 @@ if (raceId !== undefined) {
   const sealed = await sealVault(opened.key, password, opened.provider, race);
   const check = await openEntry(sealed, password);
   if (check.key !== opened.key.trim() || check.race?.key !== race?.key.trim()) throw Error('self-check failed');
-  const next = entry.name ? {v: sealed.v, provider: sealed.provider, name: entry.name, ...sealed} : sealed;
+  const next = {...(entry.name ? {v: sealed.v, provider: sealed.provider, name: entry.name, ...sealed} : sealed), ...(entry.prefs && {prefs: entry.prefs})};
   const entries = existing.map((e, i) => (i === at ? next : e));
   save(entries);
   console.log(race ? `Готово: «${label(next)}» — каждый вопрос уходит обоим, первый ответ вписывается, второй для сверки.`
@@ -144,7 +144,8 @@ const race = prev?.race ? (await openEntry(prev, password).catch(() => null))?.r
 if (prev?.race && !race) console.log(`Второй ключ (${providerName(prev.race)}) не перенесён: пароль новый. Добавьте снова: node tools/seal.mjs --race ${prev.race.provider}`);
 const sealed = await sealVault(apiKey, password, id, race);
 if (await openVault(sealed, password) !== apiKey.trim()) throw Error('self-check failed');
-const entry = name ? {v: sealed.v, provider: id, name, ...sealed} : sealed;
+// The account's own settings (prefs: model and depth per provider) stay with it.
+const entry = {...(name ? {v: sealed.v, provider: id, name, ...sealed} : sealed), ...(prev?.prefs && {prefs: prev.prefs})};
 const at = existing.findIndex(replaces); // keep a replaced entry in its place
 const entries = at < 0 ? [...existing, entry] : existing.map((e, i) => (i === at ? entry : e)).filter((e, i) => i === at || !replaces(e));
 save(entries);

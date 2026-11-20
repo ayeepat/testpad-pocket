@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import {sealVault, openVault, openAny, provider, parseReply, buildBody, describeTask, explainHttp, isParamError, DEFAULT_MODEL, probeHost, fastestHost, sameAnswer, race, ask} from '../extension/lib.js';
+import {sealVault, openVault, openAny, provider, parseReply, buildBody, describeTask, explainHttp, isParamError, DEFAULT_MODEL, probeHost, fastestHost, sameAnswer, race, ask, modelFor} from '../extension/lib.js';
 
 test('vault round-trips and rejects a wrong password', async () => {
   const vault = await sealVault('  sk-test-123  ', 'correct horse battery');
@@ -168,4 +168,19 @@ test('ask streams the answer, passes over a host that rejects the key, retries w
     assert.ok(hits.every(h => h.auth === 'Bearer pz' && h.model === 'm'));
     await assert.rejects(ask({key: 'pz', id: 'polza', hosts: [base + '/nokey'], model: 'm', effort: '', task: {question: 'q', fields: [], images: []}}), /Ключ Polza\.ai не принят/);
   } finally { s.closeAllConnections(); s.close(); }
+});
+
+test('an account can carry its own model and depth per provider; the popup on a computer still wins', async () => {
+  const prefs = {'302': {model: 'gpt-6.2-sol', effort: 'medium'}, polza: {model: 'openai/gpt-6.2-sol', effort: 'medium'}};
+  const entry = {...await sealVault('sk-302', 'my own long password', '302', {provider: 'polza', key: 'pz'}), prefs};
+  assert.deepEqual((await openAny([entry], 'my own long password')).prefs, prefs);
+  // Account settings over the defaults, for both providers.
+  assert.deepEqual(modelFor('302', {prefs}), {model: 'gpt-6.2-sol', effort: 'medium'});
+  assert.deepEqual(modelFor('polza', {prefs, main: false}), {model: 'openai/gpt-6.2-sol', effort: 'medium'});
+  // No settings: the provider default and high, as before.
+  assert.deepEqual(modelFor('polza'), {model: 'google/gemini-3.8-flash', effort: 'high'});
+  // The popup's model is for the main provider only; its depth is for both.
+  const local = {model: 'gemini-3.8-flash', effort: 'high'};
+  assert.deepEqual(modelFor('302', {prefs, local}), {model: 'gemini-3.8-flash', effort: 'high'});
+  assert.deepEqual(modelFor('polza', {prefs, local, main: false}), {model: 'openai/gpt-6.2-sol', effort: 'high'});
 });

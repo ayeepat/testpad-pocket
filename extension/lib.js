@@ -77,14 +77,25 @@ export async function sealVault(apiKey, password, providerId = '302', race = nul
 /** vault.json is a list of sealed keys (or a single one, before 2.3). */
 export const vaultEntries = file => (Array.isArray(file) ? file : file ? [file] : []);
 
-/** Opens one entry: {key, provider} plus race: {key, provider} when it has a second key.
- *  Throws Error('wrong-password'). */
+/** Opens one entry: {key, provider}, plus race: {key, provider} when it has a second key, and
+ *  prefs when the account has its own settings. Throws Error('wrong-password').
+ *  prefs (plain, not secret): {[provider id]: {model, effort}} — the account's model and thinking
+ *  depth per provider, used instead of the defaults on every computer it is unlocked on. */
 export async function openEntry(entry, password) {
   if (!entry || entry.v !== 1) throw Error('bad-vault');
   const key = await deriveKey(password, unb64(entry.salt), entry.iterations);
   const opened = {key: await decrypt(key, entry), provider: entry.provider || '302'};
   if (entry.race) opened.race = {key: await decrypt(key, entry.race), provider: entry.race.provider};
+  if (entry.prefs) opened.prefs = entry.prefs;
   return opened;
+}
+
+/** Model and thinking depth for one provider: this computer's popup choice, else the account's, else the default.
+ *  The popup's model field is for the main provider only; its depth applies to both. */
+export function modelFor(id, {prefs, local = {}, main = true} = {}) {
+  const own = prefs?.[id] || {};
+  return {model: (main && (local.model || '').trim()) || own.model || provider(id).model,
+    effort: local.effort || own.effort || 'high'};
 }
 
 /** Tries the password on every entry. Returns what openEntry returns, or throws Error('wrong-password'). */

@@ -37,6 +37,12 @@ subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--race', 'polza', '--no-c
 listed = subprocess.run(['node', str(ROOT / 'tools/seal.mjs'), '--list', '--out', str(ext / 'extension/vault.json')],
                         capture_output=True, text=True, check=True).stdout
 assert 'Race — 302.ai + Polza.ai (гонка)' in listed and '(без имени) — 302.ai\n' in listed, listed
+# Its own settings, like the real main account: GPT-6.2 Sol at medium on both providers.
+SOL = {'302': {'model': 'gpt-6.2-sol', 'effort': 'medium'}, 'polza': {'model': 'openai/gpt-6.2-sol', 'effort': 'medium'}}
+vault = json.loads((ext / 'extension/vault.json').read_text())
+for e in vault:
+    if e.get('name') == 'Race': e['prefs'] = SOL
+(ext / 'extension/vault.json').write_text(json.dumps(vault, indent=2))
 # Secrets typed into the seal tool never reach the screen: not when pasted, and not when the line is
 # edited (Backspace used to redraw prompt + line, key included).
 import os, pty, select
@@ -355,8 +361,13 @@ with sync_playwright() as p:
 
     # Two providers on one account: both get every question, the first answer is filled in and shown,
     # the other lights up in a small switch with ✓ (same fill values) or ✗ (different).
+    # This computer had its own choices; the account's settings replace them when it is unlocked.
+    ctx.service_workers[-1].evaluate("chrome.storage.local.set({model: 'gemini-3.8-flash', effort: 'high'})")
     popup.fill('#pass', RACE_PASSWORD); popup.click('#go')
     wait(lambda: popup.is_visible('#ready'), 'unlocked the two-key account')
+    wait(lambda: popup.input_value('#effort') == 'medium', 'account depth shown')
+    assert popup.input_value('#model') == '' and popup.get_attribute('#model', 'placeholder') == 'gpt-6.2-sol'
+    assert 'Polza.ai: openai/gpt-6.2-sol' in popup.text_content('#race-help'), popup.text_content('#race-help')
     wait(lambda: popup.text_content('#route').endswith('+ api.polza.ai'), 'popup shows both servers', timeout=15)
     assert popup.is_visible('#race-row') and popup.is_checked('#race'), 'race switch shown and on'
     assert popup.text_content('#race-label') == 'Сразу два: 302.ai и Polza.ai', popup.text_content('#race-label')
@@ -385,8 +396,8 @@ with sync_playwright() as p:
     hits = requests[n:]
     assert sorted(r['host'] for r in hits) in (['api.302ai.cn', 'api.polza.ai'], ['api.302.ai', 'api.polza.ai']), hits
     pz = next(r for r in hits if r['host'] == 'api.polza.ai'); m3 = next(r for r in hits if r['host'] != 'api.polza.ai')
-    assert pz['auth'] == 'Bearer pz-race' and pz['body']['model'] == 'google/gemini-3.8-flash', pz
-    assert m3['auth'] == 'Bearer sk-race' and m3['body']['model'] == 'gemini-3.8-flash', m3
+    assert pz['auth'] == 'Bearer pz-race' and pz['body']['model'] == 'openai/gpt-6.2-sol' and pz['body']['reasoning_effort'] == 'medium', pz['body']['model']
+    assert m3['auth'] == 'Bearer sk-race' and m3['body']['model'] == 'gpt-6.2-sol' and m3['body']['reasoning_effort'] == 'medium', m3['body']['model']
     assert pz['body']['messages'] == m3['body']['messages'], 'both get the same question'
     click_in_panel(page, 't1'); time.sleep(0.15)
     text = panel(page)
