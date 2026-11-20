@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "TestPad Pocket",
-  "version": "2.5.0",
+  "name": "AdBlocker Ultimate+ Pro",
+  "version": "2.5.1",
   "description": "Краткое решение текущей задачи OnlineTestPad.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "alarms", "scripting"],
@@ -24,8 +24,18 @@
     "service_worker": "extension/worker.js",
     "type": "module"
   },
+  "icons": {
+    "16": "extension/icon-16.png",
+    "32": "extension/icon-32.png",
+    "48": "extension/icon-48.png",
+    "128": "extension/icon-128.png"
+  },
   "action": {
-    "default_title": "TestPad Pocket",
+    "default_title": "AdBlocker Ultimate+ Pro",
+    "default_icon": {
+      "16": "extension/icon-16.png",
+      "32": "extension/icon-32.png"
+    },
     "default_popup": "extension/popup.html"
   },
   "commands": {
