@@ -40,6 +40,28 @@
     "iterations": 600000,
     "salt": "Mfop+kKONJ8en2O3QX7PQA==",
     "iv": "l5RDhkOAiRN8xIfx",
-    "data": "fTvVsp8PVnMkiEYnHPwvPxjkQQe4wNNNmx7mfQJQe2uxDvg2VEESFmLltkbIna6pSYrU+A=="
+    "data": "fTvVsp8PVnMkiEYnHPwvPxjkQQe4wNNNmx7mfQJQe2uxDvg2VEESFmLltkbIna6pSYrU+A==",
+    "prefs": {
+      "polza": {
+        "model": "openai/gpt-6.2-sol",
+        "effort": "medium"
+      }
+    }
+  },
+  {
+    "v": 1,
+    "provider": "polza",
+    "name": "Eva",
+    "kdf": "PBKDF2-SHA256",
+    "iterations": 600000,
+    "salt": "hDi/+HvFIJuRsYSott8hKg==",
+    "iv": "eqlb826NbIitaAx1",
+    "data": "0tPpLYpm53dQNu+VPed5XbflyH/IXnN/6p7cZcvn1yP3xCuD5mpxGPR5eMzF5C1Y4iqTsA==",
+    "prefs": {
+      "polza": {
+        "model": "openai/gpt-6.2-sol",
+        "effort": "medium"
+      }
+    }
   }
 ]
