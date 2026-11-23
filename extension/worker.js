@@ -1,16 +1,31 @@
-import {API_HOSTS, provider, fastestHost, openAny, ask, race, sameAnswer, modelFor} from './lib.js';
+import {API_HOSTS, provider, fastestHost, openAccount, vaultEntries, ask, race, sameAnswer, modelFor} from './lib.js';
 
 let active = 0; // solves in flight; never self-reload during one
 const OTP_URL = /^https:\/\/(?:[\w-]+\.)*onlinetestpad\.com\//i;
-const KEYS = ['apiKey', 'provider', 'raceKey', 'raceProvider', 'prefs'];
+const KEYS = ['apiKey', 'provider', 'raceKey', 'raceProvider', 'prefs', 'vaultSalt'];
+
+const loadVault = () => fetch(chrome.runtime.getURL('extension/vault.json'), {cache: 'no-store'})
+  .then(r => r.ok ? r.json() : null).catch(() => null);
+
+async function account() {
+  const temp = await chrome.storage.session.get(KEYS);
+  const saved = temp.apiKey ? temp : await chrome.storage.local.get(KEYS);
+  if (!saved.apiKey) return null;
+
+  // A seal's salt stays the same when only its public model settings change.
+  // An older login or a resealed entry needs the password to identify it again.
+  const vault = saved.vaultSalt ? await loadVault() : null;
+  const entry = vaultEntries(vault).find(e => e?.salt === saved.vaultSalt);
+  return {...saved, remembered: !temp.apiKey, prefs: entry ? entry.prefs : saved.prefs,
+    needsPassword: !saved.vaultSalt || (!!vault && !entry)};
+}
 
 /** The unlocked key and its provider id ('302' or 'polza'), or null.
  *  race: {key, provider} when the account has a second key and this computer hasn't turned it off.
  *  prefs: the account's own model and depth per provider, if it has them. */
 async function creds() {
-  const temp = await chrome.storage.session.get(KEYS);
-  const s = temp.apiKey ? temp : await chrome.storage.local.get(KEYS);
-  if (!s.apiKey) return null;
+  const s = await account();
+  if (!s) return null;
   const {raceOff} = await chrome.storage.local.get('raceOff');
   const c = {key: s.apiKey, provider: s.provider || '302', prefs: s.prefs};
   if (s.raceKey && !raceOff) c.race = {key: s.raceKey, provider: s.raceProvider};
@@ -96,7 +111,7 @@ chrome.runtime.onConnect.addListener(port => {
     if (!msg.solve) return;
     try {
       const task = msg.solve, c = await creds();
-      if (!c) return post({error: 'Расширение заблокировано. Нажмите на значок TestPad Pocket и введите пароль.'});
+      if (!c) return post({error: `Расширение заблокировано. Нажмите на значок «${chrome.runtime.getManifest().name}» и введите пароль.`});
       const image = task.useFormula === false ? null : await formula();
       const runs = c.race ? [{...c, main: true}, c.race] : [{...c, main: true}];
       const name = id => provider(id).name;
@@ -124,12 +139,18 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     return;
   }
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return; // extension pages only
+  if (msg.account) {
+    account().then(s => reply(s ? {unlocked: true, remembered: s.remembered, provider: s.provider,
+      raceProvider: s.raceProvider, prefs: s.prefs, needsPassword: s.needsPassword} : {}));
+    return true;
+  }
   if (msg.unlock) {
     (async () => {
-      const vault = await fetch(chrome.runtime.getURL('extension/vault.json')).then(r => r.ok ? r.json() : null).catch(() => null);
+      const vault = await loadVault();
       if (!vault) return {error: 'В папке расширения нет extension/vault.json. Запустите node tools/seal.mjs и обновите расширение.'};
       try {
-        const {key, provider: id, race, prefs} = await openAny(vault, msg.unlock.password);
+        const {credentials, entry} = await openAccount(vault, msg.unlock.password);
+        const {key, provider: id, race, prefs} = credentials;
         // A model name typed for one provider means nothing on the other; an account with its own
         // settings brings them along, so this computer's earlier choices give way.
         if (id !== await providerId()) await chrome.storage.local.remove('model');
@@ -137,7 +158,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await chrome.storage.local.remove(KEYS);
         await chrome.storage.session.remove(KEYS);
         await (msg.unlock.remember ? chrome.storage.local : chrome.storage.session)
-          .set({apiKey: key, provider: id, ...(race && {raceKey: race.key, raceProvider: race.provider}), ...(prefs && {prefs})});
+          .set({apiKey: key, provider: id, vaultSalt: entry.salt,
+            ...(race && {raceKey: race.key, raceProvider: race.provider}), ...(prefs && {prefs})});
         return {ok: true};
       } catch (err) { return {error: err.message === 'wrong-password' ? 'Неверный пароль.' : 'Хранилище повреждено.'}; }
     })().then(reply);

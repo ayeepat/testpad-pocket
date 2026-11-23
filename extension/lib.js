@@ -98,15 +98,20 @@ export function modelFor(id, {prefs, local = {}, main = true} = {}) {
     effort: local.effort || own.effort || 'high'};
 }
 
-/** Tries the password on every entry. Returns what openEntry returns, or throws Error('wrong-password'). */
-export async function openAny(file, password) {
+/** Finds the account for this password and returns its credentials and vault entry. */
+export async function openAccount(file, password) {
   const entries = vaultEntries(file);
   if (!entries.length) throw Error('bad-vault');
   for (const entry of entries) {
-    try { return await openEntry(entry, password); }
+    try { return {credentials: await openEntry(entry, password), entry}; }
     catch (err) { if (err.message !== 'wrong-password') throw err; }
   }
   throw Error('wrong-password');
+}
+
+/** Opens the account for this password without returning vault metadata. */
+export async function openAny(file, password) {
+  return (await openAccount(file, password)).credentials;
 }
 
 /** Returns the entry's main API key, or throws Error('wrong-password'). */

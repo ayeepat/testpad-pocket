@@ -10,11 +10,12 @@ function pretty(shortcut) {
 }
 
 async function refresh() {
-  const KEYS = ['apiKey', 'provider', 'raceProvider', 'prefs'];
-  const [local, temp] = await Promise.all([
-    chrome.storage.local.get([...KEYS, 'model', 'effort', 'raceOff']), chrome.storage.session.get(KEYS)]);
-  const {apiKey: saved, model, effort} = local, keys = temp.apiKey ? temp : local;
-  const unlocked = !!(saved || temp.apiKey);
+  const [{model, effort, raceOff}, keys, commands] = await Promise.all([
+    chrome.storage.local.get(['model', 'effort', 'raceOff']),
+    chrome.runtime.sendMessage({account: true}),
+    chrome.commands.getAll(),
+  ]);
+  const {unlocked, remembered, needsPassword} = keys;
   const prov = provider(keys.provider);
   // The account's own model (if it has one) is what an empty field means.
   const own = modelFor(keys.provider, {prefs: keys.prefs});
@@ -24,29 +25,45 @@ async function refresh() {
     const other = modelFor(keys.raceProvider, {prefs: keys.prefs, main: false});
     $('race-label').textContent = `Сразу два: ${prov.name} и ${provider(keys.raceProvider).name}`;
     $('race-models').textContent = `${provider(keys.raceProvider).name}: ${other.model}`;
-    $('race').checked = !local.raceOff;
+    $('race').checked = !raceOff;
   }
   $('model-label').textContent = 'Модель ' + prov.name;
   $('model').placeholder = own.model;
   $('title').className = unlocked ? 'on' : '';
-  $('state').textContent = unlocked ? (saved ? 'Готово' : 'Готово до закрытия браузера') : 'Заблокировано';
-  $('unlock').hidden = unlocked;
+  $('state').textContent = unlocked ? (remembered ? 'Готово' : 'Готово до закрытия браузера') : 'Заблокировано';
+  $('unlock').hidden = !!unlocked;
   $('ready').hidden = !unlocked;
+  $('refresh-account').hidden = !needsPassword;
+  $('cancel-refresh').hidden = true;
+  $('remember').checked = !unlocked || remembered;
   $('model').value = model && model !== own.model ? model : '';
   $('effort').value = effort || own.effort;
-  const commands = await chrome.commands.getAll();
   const key = name => commands.find(c => c.name === name)?.shortcut;
   $('k-solve').innerHTML = pretty(key('solve'));
   $('k-toggle').innerHTML = pretty(key('toggle-panel'));
   if (!unlocked) $('pass').focus();
 }
 
+$('refresh-account').addEventListener('click', () => {
+  $('ready').hidden = true;
+  $('unlock').hidden = $('cancel-refresh').hidden = false;
+  msg('Введите пароль аккаунта, чтобы загрузить его настройки.');
+  $('pass').focus();
+});
+
+$('cancel-refresh').addEventListener('click', () => {
+  $('pass').value = '';
+  msg('');
+  refresh();
+});
+
 $('unlock').addEventListener('submit', async e => {
   e.preventDefault();
-  $('go').disabled = true; msg('Проверяю…', true);
+  $('go').disabled = $('cancel-refresh').disabled = true;
+  msg('Проверяю…', true);
   // The worker does the work, so closing this popup mid-way is harmless.
   const res = await chrome.runtime.sendMessage({unlock: {password: $('pass').value, remember: $('remember').checked}}).catch(() => null);
-  $('go').disabled = false;
+  $('go').disabled = $('cancel-refresh').disabled = false;
   if (!res?.ok) return msg(res?.error || 'Не удалось открыть.');
   $('pass').value = '';
   msg('Открыто. Окно можно закрыть.', true);

@@ -355,9 +355,61 @@ with sync_playwright() as p:
     time.sleep(0.3); page.keyboard.press('Control+Shift+9')
     assert 'Ключ Polza.ai не принят' in open_answer(page), 'Polza.ai auth error named'
     mode['v'] = 'ok'
-    popup.click('#lock')  # «Дополнительно» is still open from the sign-out above
-    wait(lambda: popup.is_visible('#unlock'), 'locked again')
     print('second password -> Polza.ai: ok')
+
+    # A pre-upgrade remembered login keeps working and can refresh without signing out.
+    ctx.service_workers[-1].evaluate("chrome.storage.local.remove('vaultSalt')")
+    popup.reload()
+    wait(lambda: popup.is_visible('#refresh-account'), 'legacy login needs the account password once')
+    popup.click('#refresh-account')
+    assert popup.is_checked('#remember'), 'refresh preserves the remembered choice'
+    popup.fill('#pass', 'wrong-password-xx'); popup.click('#go')
+    wait(lambda: 'Неверный' in popup.text_content('#msg'), 'wrong refresh password')
+    popup.click('#cancel-refresh')
+    wait(lambda: popup.is_visible('#ready'), 'cancel keeps the previous login')
+    assert popup.input_value('#pass') == ''
+
+    vault_path = ext / 'extension/vault.json'
+    entries = json.loads(vault_path.read_text())
+    named = next(e for e in entries if e.get('name') == 'E2E')
+    named['prefs'] = {'polza': SOL['polza'].copy()}
+    vault_path.write_text(json.dumps(entries))
+    popup.click('#refresh-account')
+    popup.fill('#pass', NAMED_PASSWORD); popup.click('#go')
+    wait(lambda: popup.is_visible('#ready'), 'account refreshed with the correct password')
+    assert not popup.is_visible('#refresh-account')
+    assert popup.get_attribute('#model', 'placeholder') == 'openai/gpt-6.2-sol'
+    assert popup.input_value('#effort') == 'medium'
+
+    # Changing preferences on the same sealed account applies to an already unlocked session.
+    named['prefs']['polza']['effort'] = 'high'
+    vault_path.write_text(json.dumps(entries))
+    popup.reload()
+    wait(lambda: popup.is_visible('#ready'), 'linked account stays unlocked')
+    assert not popup.is_visible('#refresh-account')
+    assert popup.input_value('#effort') == 'high'
+
+    # Grouped decimals and explicit exponents are safe. An expression or overflow leaves the field alone.
+    page.evaluate("""() => {
+      const fields = document.querySelector('.qcontainer');
+      fields.insertAdjacentHTML('beforeend', '<input type="number" id="decimal"><input type="number" id="exponent"><input type="number" id="expression" value="7"><input type="number" id="overflow" value="8">');
+    }""")
+    reply_values['api.polza.ai'] = ['2', '1 722,7', '+2e3', '2×10^3', '1e999']
+    time.sleep(0.3); page.keyboard.press('Control+Shift+9')
+    text = open_answer(page)
+    assert 'Заполнено 3 из 5' in text, text
+    assert page.input_value('#decimal') == '1722.7'
+    assert page.input_value('#exponent') == '2e3'
+    assert page.input_value('#expression') == '7'
+    assert page.input_value('#overflow') == '8'
+    assert requests[-1]['body']['model'] == 'openai/gpt-6.2-sol'
+    assert requests[-1]['body']['reasoning_effort'] == 'high'
+    page.evaluate("document.querySelectorAll('#decimal,#exponent,#expression,#overflow').forEach(el => el.remove())")
+    reply_values.clear()
+    print('account refresh + safe numeric autofill: ok')
+
+    popup.click('summary'); popup.click('#lock')
+    wait(lambda: popup.is_visible('#unlock'), 'locked again')
 
     # Two providers on one account: both get every question, the first answer is filled in and shown,
     # the other lights up in a small switch with ✓ (same fill values) or ✗ (different).

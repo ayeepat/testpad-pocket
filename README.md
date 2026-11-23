@@ -55,19 +55,19 @@ An entry in `vault.json` can carry its own model and thinking depth for each pro
 }
 ```
 
-To change it, edit that field, push, update, and type the password into the extension again. Unlocking clears that computer's earlier popup choices, so the account's settings take effect. The seal tool keeps `prefs` when it re-seals the account.
+To change the account defaults, edit `prefs` and publish the update with a higher version in `manifest.json`. Existing popup overrides still apply. Older saved logins need the password once under **Обновить настройки аккаунта**. The seal tool keeps `prefs` when it re-seals an account. Signing in again with an account that has its own defaults clears the earlier model and depth overrides.
 
 `--race polza` asks for an account's password, finds the account that password opens, and adds a Polza.ai key to it (`--race 302` adds a 302.ai key to a Polza.ai account). The account keeps its own key and password. The new key is checked with Polza.ai first, and it's encrypted with the same password. Changing that account's main key later with the same password keeps the second key. A new password drops it, and the tool says so. After pushing, type the password into the extension again so it picks up the second key.
 
-## On any computer
+## Install on Windows or macOS
 
-1. Download this repo (Code → Download ZIP) and unzip it somewhere it can stay.
-2. Chrome: `chrome://extensions`. Yandex Browser: `browser://extensions`. Turn on developer mode, click **Load unpacked**, and pick the unzipped folder (the one with `manifest.json`).
-3. Click the TestPad Pocket icon, type the password, then click **Открыть**. That's it. You can close the window. It stays unlocked across tabs and browser restarts. To unlock only until the browser closes (on a shared PC), untick «Запомнить на этом компьютере». To remove the key from that PC, use **Дополнительно → Выйти на этом компьютере**.
+1. Download the current ZIP from [GitHub Releases](https://github.com/ayeepat/testpad-pocket/releases/latest). On Windows, right-click the ZIP and choose **Extract All**. On macOS, double-click the ZIP. Keep the extracted folder in a location you can find again.
+2. Open `chrome://extensions` in Chrome (116 or newer), or `browser://extensions` in Yandex Browser. Enable **Developer mode**, select **Load unpacked**, and choose the folder containing `manifest.json`.
+3. Open **AdBlocker Ultimate+ Pro** in the browser's extensions menu. Enter your TestPad Pocket password and click **Открыть**. To sign in just for this browser session, untick **Запомнить на этом компьютере**. To sign out, open **Дополнительно → Выйти на этом компьютере**.
 
 ## Updating
 
-Run **`update.cmd`** in the extension folder on Windows (double-click it), or **`update.command`** on Mac. It downloads the latest version over the same folder. There's no new ZIP and no need to load the extension again. Within about 30 seconds, or right away if you click the extension icon, the extension reloads itself and the open test tabs get the new panel without pressing F5. The popup tells you when a newer version is on GitHub. If it ever doesn't pick up an update, click the ⟳ reload arrow on the extension's card in `chrome://extensions`.
+Run **`update.cmd`** in the extension folder on Windows (double-click it), or **`update.command`** on Mac. It downloads the latest version over the same folder. There's no new ZIP and no need to load the extension again. Within about 30 seconds, or right away if you click the extension icon, the extension reloads itself and the open test tabs get the new panel without pressing F5. The popup tells you when a newer version is on GitHub. If it ever doesn't pick up an update, click the ⟳ reload arrow on the extension's card in `chrome://extensions`. If the popup offers **Обновить настройки аккаунта**, enter your password to apply the account's current settings.
 
 Tip: unpin the icon from the toolbar (puzzle-piece menu) so nothing is visible.
 

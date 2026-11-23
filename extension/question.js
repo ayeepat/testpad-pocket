@@ -102,6 +102,14 @@ var otp = (() => { // var: re-injected after a self-update
     notify(el);
   }
 
+  function numericValue(value) {
+    const normalized = value.replace(/\u2212/g, '-').replace(',', '.');
+    const grouped = /^[+-]?\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:\.\d+)?(?:e[+-]?\d+)?$/i;
+    const plain = grouped.test(normalized) ? normalized.replace(/[ \u00a0\u202f]/g, '') : normalized;
+    const decimal = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?$/i;
+    return decimal.test(plain) && Number.isFinite(Number(plain)) ? plain.replace(/^\+/, '') : '';
+  }
+
   /** Fills what it can. Returns {filled, total}. Never presses Next/Finish. */
   function fill(snapshot, values) {
     let filled = 0;
@@ -113,7 +121,10 @@ var otp = (() => { // var: re-injected after a self-update
       if (!value || !el.isConnected) continue;
       try {
         if (field.kind === 'text') {
-          if (el.type === 'number') value = value.replace(',', '.').replace(/[^\d.eE+-]/g, '');
+          if (el.type === 'number') {
+            value = numericValue(value);
+            if (!value) continue;
+          }
           if (el.maxLength > 0 && value.length > el.maxLength) continue;
           setValue(el, value);
           if (el.value === value) filled++;
